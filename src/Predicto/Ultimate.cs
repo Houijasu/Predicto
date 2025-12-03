@@ -634,27 +634,14 @@ public sealed class Ultimate : IPrediction
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
 
-        // Core unit of uncertainty: how far target moves in one server tick
-        double tickMovement = Constants.GetTickMovement(targetSpeed);
-        
-        // How many ticks elapse during the cast delay?
-        double ticksOfDelay = castDelay * Constants.ServerTickRate;
-        
-        // === Delay-based uncertainty ===
-        // Each tick of delay adds half tick movement uncertainty
-        double delayUncertainty = ticksOfDelay * tickMovement * 0.5;
-        
-        // === Base speed uncertainty ===
-        // Even with zero delay, fast targets have inherent uncertainty
-        double speedUncertainty = tickMovement;
-        
-        // Combine uncertainties using RMS
-        double totalUncertainty = Math.Sqrt(
-            speedUncertainty * speedUncertainty +
-            delayUncertainty * delayUncertainty);
-
-        // Clamp: min = epsilon, max = half of effective radius
-        return Math.Clamp(totalUncertainty, Constants.Epsilon, effectiveRadius * 0.5);
+        // For circular spells, aiming at the exact trailing edge (Epsilon margin)
+        // is risky because the target is moving away from the spell center.
+        // A grazing hit might miss if the target moves even slightly further.
+        //
+        // Instead, we aim halfway between the center and the trailing edge.
+        // This maintains the "behind target" strategy (catching stops/reversals)
+        // while ensuring a solid hit on moving targets.
+        return effectiveRadius * 0.5;
     }
 
     /// <summary>

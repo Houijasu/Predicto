@@ -1333,11 +1333,15 @@ public sealed class InterceptSolver
         // Secant method needs two initial points
         // Use initialGuess and a small perturbation
         double t0 = initialGuess;
-        double t1 = initialGuess * 1.001 + 1e-6; // Small offset to avoid division by zero
+        
+        // Use a small step based on tick duration for the second point
+        // This avoids magic numbers like 1.001 or 1e-6
+        double step = Constants.TickDuration * 0.5; 
+        double t1 = initialGuess + step;
         
         // Ensure t1 is valid (must be > castDelay for meaningful evaluation)
         if (t1 <= castDelay)
-            t1 = castDelay + tolerance;
+            t1 = castDelay + step;
         
         double f0 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t0);
         double f1 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t1);
@@ -1350,7 +1354,7 @@ public sealed class InterceptSolver
         {
             // Avoid division by zero
             double denominator = f1 - f0;
-            if (Math.Abs(denominator) < 1e-15)
+            if (Math.Abs(denominator) < Constants.Epsilon)
                 break;
             
             // Secant formula: t_{n+1} = t_n - f(t_n) * (t_n - t_{n-1}) / (f(t_n) - f(t_{n-1}))
@@ -1358,7 +1362,7 @@ public sealed class InterceptSolver
             
             // Ensure t2 is valid (positive, after delay)
             if (t2 < castDelay)
-                t2 = castDelay + tolerance;
+                t2 = castDelay + Constants.Epsilon;
             
             double f2 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t2);
             
