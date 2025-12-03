@@ -92,7 +92,7 @@ public static class Constants
     /// <summary>
     /// Safety factor for tick-based margin calculation (fraction of tick distance).
     /// Used to ensure we hit inside the collision zone despite discrete time steps.
-    /// 5% gives ~3-4 pixels margin at typical speeds, enough for 30Hz/60Hz reliability.
+    /// 2% gives ~1.5 pixels margin at typical speeds - aggressive but safe for 30Hz.
     /// </summary>
-    public const double TickMarginSafetyFactor = 0.05;
+    public const double TickMarginSafetyFactor = 0.02;
 }

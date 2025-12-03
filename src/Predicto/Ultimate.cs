@@ -48,6 +48,125 @@ public sealed class Ultimate : IPrediction
         if (input.Skillshot.Range <= Constants.Epsilon)
             return new PredictionResult.Unreachable("Skillshot range must be positive");
 
+        // === Use Path-Based Prediction if Available ===
+        if (input.HasPath)
+        {
+            return PredictWithPath(input);
+        }
+
+        // === Velocity-Based Prediction (original logic) ===
+        return PredictWithVelocity(input);
+    }
+
+    /// <summary>
+    /// Path-based prediction for multi-waypoint target movement.
+    /// Iterates through path segments to find optimal interception point.
+    /// </summary>
+    private PredictionResult PredictWithPath(PredictionInput input)
+    {
+        var path = input.TargetPath!;
+
+        // === Velocity Sanity Checks ===
+        if (path.Speed > Constants.MaxReasonableVelocity)
+            return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
+
+        if (input.Skillshot.Speed > Constants.MaxReasonableSkillshotSpeed)
+            return new PredictionResult.Unreachable("Skillshot speed exceeds reasonable bounds");
+
+        // === Geometry Setup ===
+        var displacement = path.CurrentPosition - input.CasterPosition;
+        double distance = displacement.Length;
+        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+
+        // === Early Out: Target clearly out of range and moving away ===
+        if (distance > input.Skillshot.Range + effectiveRadius)
+        {
+            double dotProduct = displacement.DotProduct(path.GetCurrentVelocity());
+            if (dotProduct > 0) // Moving away
+            {
+                double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
+                var futurePosition = path.GetPositionAtTime(maxReachTime);
+                double futureDistance = (futurePosition - input.CasterPosition).Length;
+
+                if (futureDistance > input.Skillshot.Range + effectiveRadius)
+                    return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
+            }
+        }
+
+        // === Stationary Target ===
+        if (path.Speed < Constants.MinVelocity)
+        {
+            return PredictStationary(input, distance, effectiveRadius);
+        }
+
+        // === Calculate Adaptive Margin ===
+        double adaptiveMargin = CalculateAdaptiveMargin(
+            path.Speed,
+            distance,
+            input.Skillshot.Speed,
+            input.Skillshot.Width,
+            effectiveRadius);
+
+        // === Solve Path-Based BEHIND-TARGET Interception ===
+        var result = InterceptSolver.SolvePathBehindTargetIntercept(
+            input.CasterPosition,
+            path,
+            input.Skillshot.Speed,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Width,
+            input.Skillshot.Range,
+            behindMargin: adaptiveMargin);
+
+        if (!result.HasValue)
+        {
+            return new PredictionResult.Unreachable("No valid interception solution exists along target path");
+        }
+
+        var interceptResult = result.Value;
+
+        // === Range Validation ===
+        double flightTime = Math.Max(0, interceptResult.InterceptTime - input.Skillshot.Delay);
+        double travelDistance = input.Skillshot.Speed * flightTime;
+
+        if (travelDistance > input.Skillshot.Range)
+        {
+            return new PredictionResult.OutOfRange(travelDistance, input.Skillshot.Range);
+        }
+
+        // === Calculate Enhanced Confidence ===
+        var currentVelocity = path.GetCurrentVelocity();
+        double confidence = CalculateEnhancedConfidence(
+            interceptResult.InterceptTime,
+            distance,
+            path.Speed,
+            input.Skillshot.Speed,
+            input.Skillshot.Range,
+            input.Skillshot.Delay,
+            displacement,
+            currentVelocity);
+
+        // === Confidence Penalty for Late Waypoints ===
+        // Predictions on later waypoints are less reliable (more time for target to change path)
+        if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
+        {
+            int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
+            double waypointPenalty = Math.Pow(0.9, waypointDelta); // 10% reduction per waypoint
+            confidence *= waypointPenalty;
+        }
+
+        return new PredictionResult.Hit(
+            CastPosition: interceptResult.AimPoint,
+            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
+            InterceptTime: interceptResult.InterceptTime,
+            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+    }
+
+    /// <summary>
+    /// Velocity-based prediction for simple linear movement.
+    /// </summary>
+    private PredictionResult PredictWithVelocity(PredictionInput input)
+    {
         // === Velocity Sanity Checks ===
         double targetSpeed = input.TargetVelocity.Length;
         if (targetSpeed > Constants.MaxReasonableVelocity)
@@ -213,9 +332,9 @@ public sealed class Ultimate : IPrediction
     }
 
     /// <summary>
-    /// Calculates adaptive margin based on target speed and distance.
-    /// Fast-moving targets get smaller margins (more aggressive).
-    /// Slow or distant targets get larger margins (more forgiving).
+    /// Calculates the minimum margin for maximum aggressiveness.
+    /// Uses only a tiny epsilon margin for numerical stability.
+    /// LoL uses swept collision detection, so we don't need tick-based margins.
     /// </summary>
     private static double CalculateAdaptiveMargin(
         double targetSpeed,
@@ -224,30 +343,16 @@ public sealed class Ultimate : IPrediction
         double skillshotWidth,
         double effectiveRadius)
     {
-        // Calculate margin based on server tick rate for reliable hits
-        // LoL uses 30Hz server tick with swept collision detection
-        // We need enough margin to account for discrete tick boundaries
-        
-        // Relative speed between skillshot and target (worst case: head-on)
-        double relativeSpeed = skillshotSpeed + targetSpeed;
-        
-        // Distance covered per server tick
-        double distancePerTick = relativeSpeed * Constants.TickDuration;
-        
-        // Use safety factor of tick distance as margin
-        // This handles tick boundary rounding while keeping aim aggressive
-        double tickBasedMargin = distancePerTick * Constants.TickMarginSafetyFactor;
-        
-        // Minimum margin of 0.1 pixels for mathematical precision
-        // Maximum margin of 10% of effective radius to stay aggressive
-        double minMargin = 0.1;
-        double maxMargin = effectiveRadius * 0.10;
+        // Maximum aggressiveness: aim as close to the trailing edge as possible
+        // LoL uses swept collision detection between ticks, so even edge hits register
+        // Use minimal margin (0.1 pixels) just for numerical stability
         
         // For very small effective radii, scale proportionally
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
         
-        return Math.Clamp(tickBasedMargin, minMargin, maxMargin);
+        // Minimum practical margin - essentially aiming at the exact edge
+        return 0.1;
     }
 
     /// <summary>

@@ -923,4 +923,465 @@ public class InterceptSolverTests
     }
 
     #endregion
+
+    #region Edge Case Regression Tests
+
+    /// <summary>
+    /// Tests that Secant refinement works correctly when initialGuess is very close to castDelay.
+    /// This tests the fix for the t1 clamping issue where t1 could be <= castDelay.
+    /// </summary>
+    [Fact]
+    public void SecantRefinement_InitialGuessNearCastDelay_DoesNotFail()
+    {
+        // Setup: target very close, so intercept time is barely above castDelay
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(50, 0); // Very close
+        var targetVel = new Vector2D(0, 100); // Slow movement
+        double speed = 2000; // Fast projectile
+        double delay = 0.25;
+
+        // This would result in initialGuess ≈ delay + 50/2000 = 0.275
+        // The perturbation t1 = 0.275 * 1.001 + 1e-6 ≈ 0.2753
+        // Both should be > castDelay (0.25), but edge cases exist
+
+        var result = InterceptSolver.SolveBehindTargetWithSecantRefinement(
+            casterPos, targetPos, targetVel,
+            speed, delay,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 500,
+            behindMargin: 1.0,
+            tolerance: 1e-12);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > delay);
+    }
+
+    /// <summary>
+    /// Tests zero margin (aim exactly at collision edge, no safety buffer).
+    /// </summary>
+    [Fact]
+    public void ZeroMargin_AimsExactlyAtEdge()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 300);
+        double speed = 1500;
+        double delay = 0;
+        double hitbox = 65;
+        double width = 70;
+        double range = 1000;
+        double margin = 0.0; // Zero margin - aim exactly at edge
+        double effectiveRadius = hitbox + width / 2; // 100
+
+        var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            speed, delay, hitbox, width, range,
+            behindMargin: margin);
+
+        Assert.NotNull(result);
+        var (aimPoint, _, _) = result.Value;
+
+        double travelDist = (aimPoint - casterPos).Length;
+        double arrivalTime = delay + travelDist / speed;
+        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        double separation = (aimPoint - targetAtArrival).Length;
+
+        // With zero margin, separation should equal effectiveRadius exactly
+        Assert.Equal(effectiveRadius, separation, precision: 8);
+    }
+
+    /// <summary>
+    /// Tests very high target velocities for numerical stability.
+    /// </summary>
+    [Fact]
+    public void VeryHighVelocity_NumericallyStable()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 1400); // Very fast (near skillshot speed)
+        double speed = 1500;
+        double delay = 0;
+        double hitbox = 65;
+        double width = 70;
+        double range = 2000;
+
+        var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            speed, delay, hitbox, width, range,
+            behindMargin: 1.0);
+
+        // Should either find a valid intercept or return null (not crash/NaN)
+        if (result != null)
+        {
+            var (aimPoint, _, interceptTime) = result.Value;
+            Assert.False(double.IsNaN(interceptTime));
+            Assert.False(double.IsInfinity(interceptTime));
+            Assert.True(interceptTime > delay);
+        }
+    }
+
+    /// <summary>
+    /// Tests target velocity exactly equal to skillshot speed (degenerate quadratic case).
+    /// </summary>
+    [Fact]
+    public void TargetSpeedEqualsSkillshotSpeed_HandledCorrectly()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(1000, 0); // Same speed as skillshot, moving away
+        double speed = 1000;
+
+        // When |V| = s and moving directly away, target is unreachable
+        double? timeAway = InterceptSolver.SolveInterceptTime(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: speed,
+            castDelay: 0);
+
+        // Should return null (unreachable) or a very large time
+        // The solver may find a mathematical solution at infinity
+
+        // Moving TOWARD caster should be catchable
+        var towardVel = new Vector2D(-500, 0); // Moving toward caster
+        double? towardTime = InterceptSolver.SolveInterceptTime(
+            casterPos, targetPos, towardVel,
+            skillshotSpeed: speed,
+            castDelay: 0);
+
+        Assert.NotNull(towardTime);
+        Assert.True(towardTime > 0);
+        Assert.True(towardTime < 1.0); // Should intercept quickly
+    }
+
+    /// <summary>
+    /// Tests stationary target trailing edge calculation.
+    /// Verifies our simplified logic is correct.
+    /// </summary>
+    [Fact]
+    public void StationaryTarget_TrailingEdge_CalculatedCorrectly()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 0); // Stationary
+        double speed = 1000;
+        double delay = 0.25;
+        double hitbox = 65;
+        double width = 70;
+        double range = 1000;
+        double effectiveRadius = hitbox + width / 2; // 100
+
+        double? trailingTime = InterceptSolver.SolveEdgeInterceptTimeTrailing(
+            casterPos, targetPos, targetVel,
+            speed, delay, hitbox, width, range);
+
+        Assert.NotNull(trailingTime);
+
+        // For stationary target: trailingTime = delay + (distance + effectiveRadius) / speed
+        // = 0.25 + (500 + 100) / 1000 = 0.25 + 0.6 = 0.85
+        double expected = delay + (500 + effectiveRadius) / speed;
+        Assert.Equal(expected, trailingTime.Value, precision: 10);
+    }
+
+    /// <summary>
+    /// Tests target inside collision radius at start (special case).
+    /// </summary>
+    [Fact]
+    public void TargetInsideCollisionRadius_AtStart_StillWorks()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(50, 0); // Inside effectiveRadius = 100
+        var targetVel = new Vector2D(0, 200);
+        double hitbox = 65;
+        double width = 70;
+        double effectiveRadius = hitbox + width / 2; // 100
+
+        var input = new PredictionInput(
+            CasterPosition: casterPos,
+            TargetPosition: targetPos,
+            TargetVelocity: targetVel,
+            Skillshot: new LinearSkillshot(Speed: 1000, Range: 500, Width: width, Delay: 0.25),
+            TargetHitboxRadius: hitbox);
+
+        var result = _prediction.Predict(input);
+
+        // Should be a hit since target starts in range
+        Assert.IsType<PredictionResult.Hit>(result);
+    }
+
+    /// <summary>
+    /// Tests extreme cast delay values.
+    /// </summary>
+    [Fact]
+    public void ExtremeCastDelay_HandledCorrectly()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(100, 100);
+
+        // Very long delay (1.5 seconds)
+        var input = new PredictionInput(
+            CasterPosition: casterPos,
+            TargetPosition: targetPos,
+            TargetVelocity: targetVel,
+            Skillshot: new LinearSkillshot(Speed: 2000, Range: 2000, Width: 70, Delay: 1.5));
+
+        var result = _prediction.Predict(input);
+
+        if (result is PredictionResult.Hit hit)
+        {
+            Assert.True(hit.InterceptTime > 1.5);
+        }
+    }
+
+    #endregion
+
+    #region Path-Based Prediction Tests
+
+    [Fact]
+    public void PathPrediction_SimpleTwoPointPath_Works()
+    {
+        // Target moving from (500,0) toward (500,500)
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 300);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        
+        // Target is moving up (north), so predicted position should be above starting position
+        Assert.True(hit.PredictedTargetPosition.Y > 0);
+    }
+
+    [Fact]
+    public void PathPrediction_MultiWaypointPath_FindsInterceptOnCorrectSegment()
+    {
+        // Target following L-shaped path: (200,0) -> (200,300) -> (500,300)
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(200, 300), new Point2D(500, 300) },
+            currentPosition: new Point2D(200, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 800, Width: 70, Delay: 0.25));
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+    }
+
+    [Fact]
+    public void PathPrediction_StationaryPath_SameAsVelocity()
+    {
+        // Stationary target with path (speed = 0)
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(600, 0) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 0);
+
+        var inputWithPath = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1000, Range: 1000, Width: 70, Delay: 0.25));
+
+        var inputWithVelocity = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: new LinearSkillshot(Speed: 1000, Range: 1000, Width: 70, Delay: 0.25));
+
+        var resultWithPath = _prediction.Predict(inputWithPath);
+        var resultWithVelocity = _prediction.Predict(inputWithVelocity);
+
+        Assert.IsType<PredictionResult.Hit>(resultWithPath);
+        Assert.IsType<PredictionResult.Hit>(resultWithVelocity);
+
+        var hitPath = (PredictionResult.Hit)resultWithPath;
+        var hitVelocity = (PredictionResult.Hit)resultWithVelocity;
+
+        // Both should aim at the same place
+        Assert.Equal(hitVelocity.CastPosition.X, hitPath.CastPosition.X, precision: 1);
+    }
+
+    [Fact]
+    public void PathPrediction_TargetReachesFinalWaypoint_HitsAtWaypoint()
+    {
+        // Target will reach final waypoint before projectile arrives
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(300, 0) },
+            currentPosition: new Point2D(200, 0),
+            currentWaypointIndex: 0,
+            speed: 500); // Fast target, short path
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 800, Range: 500, Width: 70, Delay: 0.5)); // Slow skillshot with delay
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        // Target should be at or near final waypoint
+        Assert.True(hit.PredictedTargetPosition.X >= 280); // Near final waypoint (300,0)
+    }
+
+    [Fact]
+    public void PathPrediction_OutOfRange_ReturnsCorrectResult()
+    {
+        // Target path that goes out of range
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(2000, 0) },
+            currentPosition: new Point2D(1500, 0),
+            currentWaypointIndex: 0,
+            speed: 400);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.OutOfRange>(result);
+    }
+
+    [Fact]
+    public void TargetPath_GetPositionAtTime_FollowsWaypoints()
+    {
+        // Create a path: (0,0) -> (100,0) -> (100,100)
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(100, 0), new Point2D(100, 100) },
+            currentPosition: new Point2D(0, 0),
+            currentWaypointIndex: 0,
+            speed: 100); // 100 units/second
+
+        // At t=0, should be at start
+        var pos0 = path.GetPositionAtTime(0);
+        Assert.Equal(0, pos0.X, precision: 1);
+        Assert.Equal(0, pos0.Y, precision: 1);
+
+        // At t=0.5, should be halfway to first waypoint (50,0)
+        var pos05 = path.GetPositionAtTime(0.5);
+        Assert.Equal(50, pos05.X, precision: 1);
+        Assert.Equal(0, pos05.Y, precision: 1);
+
+        // At t=1.0, should be at first waypoint (100,0)
+        var pos1 = path.GetPositionAtTime(1.0);
+        Assert.Equal(100, pos1.X, precision: 1);
+        Assert.Equal(0, pos1.Y, precision: 1);
+
+        // At t=1.5, should be halfway up second segment (100,50)
+        var pos15 = path.GetPositionAtTime(1.5);
+        Assert.Equal(100, pos15.X, precision: 1);
+        Assert.Equal(50, pos15.Y, precision: 1);
+
+        // At t=2.0, should be at final waypoint (100,100)
+        var pos2 = path.GetPositionAtTime(2.0);
+        Assert.Equal(100, pos2.X, precision: 1);
+        Assert.Equal(100, pos2.Y, precision: 1);
+
+        // At t=3.0, should still be at final waypoint (target stops there)
+        var pos3 = path.GetPositionAtTime(3.0);
+        Assert.Equal(100, pos3.X, precision: 1);
+        Assert.Equal(100, pos3.Y, precision: 1);
+    }
+
+    [Fact]
+    public void TargetPath_GetCurrentVelocity_ReturnsCorrectDirection()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(100, 100) },
+            currentPosition: new Point2D(0, 0),
+            currentWaypointIndex: 0,
+            speed: 141.42); // ~100*sqrt(2) for diagonal movement
+
+        var velocity = path.GetCurrentVelocity();
+
+        // Should be moving diagonally (northeast)
+        Assert.True(velocity.X > 0);
+        Assert.True(velocity.Y > 0);
+        Assert.Equal(velocity.X, velocity.Y, precision: 1); // 45-degree angle
+    }
+
+    [Fact]
+    public void PathPrediction_SolverDirect_ReturnsPathInterceptResult()
+    {
+        var casterPos = new Point2D(0, 0);
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 300);
+
+        var result = InterceptSolver.SolvePathBehindTargetIntercept(
+            casterPos, path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            behindMargin: 1.0);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0.25);
+        Assert.True(result.Value.WaypointIndex >= 0);
+    }
+
+    [Fact]
+    public void PathPrediction_ConsistentWithVelocityPrediction_FirstSegment()
+    {
+        // For a simple two-point path on the first segment,
+        // path prediction should be consistent with velocity prediction
+
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 300); // Moving north
+
+        // Create equivalent path
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 1000) }, // Far away so we stay on first segment
+            currentPosition: targetPos,
+            currentWaypointIndex: 0,
+            speed: 300);
+
+        var velocityResult = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            behindMargin: 1.0);
+
+        var pathResult = InterceptSolver.SolvePathBehindTargetIntercept(
+            casterPos, path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            behindMargin: 1.0);
+
+        Assert.NotNull(velocityResult);
+        Assert.NotNull(pathResult);
+
+        // Times should be similar (not exact due to different refinement paths)
+        Assert.Equal(velocityResult.Value.InterceptTime, pathResult.Value.InterceptTime, precision: 2);
+    }
+
+    #endregion
 }

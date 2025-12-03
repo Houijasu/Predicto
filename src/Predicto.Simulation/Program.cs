@@ -63,6 +63,7 @@ Vector2 skillshotPos = Vector2.Zero;
 Vector2 skillshotDir = Vector2.Zero;
 Vector2 fireTargetStartPos = Vector2.Zero;
 Vector2 fireAimPos = Vector2.Zero;
+Vector2 currentAnimTargetPos = Vector2.Zero;  // Current animated target position during firing
 bool skillshotLaunched = false;
 string hitResult = "";
 float hitResultTimer = 0f;
@@ -71,7 +72,15 @@ int missCount = 0;
 
 // Trail effect
 List<Vector2> skillshotTrail = new();
-List<Vector2> targetTrail = new();
+
+// Path mode - multi-waypoint support
+List<Vector2> waypoints = new();
+bool pathModeActive = false;
+TargetPath? activePath = null;  // Used during firing animation
+Vector2 pathStartPos = Vector2.Zero;  // Starting position when path was created
+float pathElapsedTime = 0f;  // Time elapsed since path started (unused now, kept for potential future use)
+bool continuousFiring = false;  // Whether we're in continuous fire mode (path mode)
+float pathTotalTime = 0f;  // Total time elapsed on path during continuous firing
 
 // Prediction result
 PredictionResult? ultimateResult = null;
@@ -80,6 +89,21 @@ PredictionResult? ultimateResult = null;
 Vector2 collisionPos = Vector2.Zero;
 float collisionTime = 0f;
 float collisionDisplayTimer = 0f;
+
+// Debug info for miss logging
+int currentShotNumber = 0;
+float shotPathTotalTime = 0f;
+Vector2 shotCasterPos = Vector2.Zero;
+Vector2 shotTargetStartPos = Vector2.Zero;
+Vector2 shotAimPos = Vector2.Zero;
+Vector2 shotPredictedTargetPos = Vector2.Zero;
+double shotInterceptTime = 0;
+double shotConfidence = 0;
+List<Vector2> shotWaypoints = new();
+Vector2 shotCurrentPathPos = Vector2.Zero;  // Target position on path when shot started
+Vector2 shotPrevWaypoint = Vector2.Zero;    // Previous waypoint (or start pos)
+Vector2 shotNextWaypoint = Vector2.Zero;    // Next waypoint target is heading toward
+int shotCurrentWaypointIndex = -1;          // Which waypoint we're heading toward
 
 // Presets
 var presets = new (string Name, Vector2 Vel, float Speed, float Range, float Width, float Delay)[]
@@ -158,44 +182,327 @@ while (!Raylib.WindowShouldClose())
     Vector2 mouseWorld = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), camera);
     HandleInput(ref casterPos, ref targetPos, ref targetVelocity, ref targetSpeed,
                 ref skillshotSpeed, ref skillshotRange, ref skillshotWidth, ref skillshotDelay,
-                presets, ref currentPreset, isFiring, mouseWorld);
+                presets, ref currentPreset, isFiring, mouseWorld, waypoints, ref pathModeActive,
+                ref pathStartPos, ref pathElapsedTime);
+
+    // Target stays stationary while drawing path - only moves when firing
 
     // Run prediction
-    var input = new PredictionInput(
-        new Point2D(casterPos.X, casterPos.Y),
-        new Point2D(targetPos.X, targetPos.Y),
-        new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
-        new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
-        targetHitbox);
+    PredictionInput input;
+    if (pathModeActive && waypoints.Count > 0)
+    {
+        // Build the path from the original start position
+        var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+        var fullPath = new TargetPath(
+            waypointsList,
+            new Point2D(pathStartPos.X, pathStartPos.Y),
+            0,
+            targetSpeed);
+        
+        // Find which segment the target is currently on
+        double remainingDistance = targetSpeed * pathElapsedTime;
+        var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+        int currentWaypointIndex = 0;
+        
+        while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+        {
+            var target = waypointsList[currentWaypointIndex];
+            var distanceToTarget = (target - position).Length;
+            
+            if (distanceToTarget <= remainingDistance)
+            {
+                position = target;
+                remainingDistance -= distanceToTarget;
+                currentWaypointIndex++;
+            }
+            else
+            {
+                break;
+            }
+        }
+        
+        // If we've passed all waypoints, target is stationary at last waypoint
+        if (currentWaypointIndex >= waypointsList.Count)
+        {
+            // Target stopped at last waypoint - use zero velocity (stationary target)
+            input = new PredictionInput(
+                new Point2D(casterPos.X, casterPos.Y),
+                new Point2D(targetPos.X, targetPos.Y),
+                new Vector2D(0, 0),  // Stationary
+                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                targetHitbox);
+        }
+        else
+        {
+            // Still on path - create path from current position with remaining waypoints
+            var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+            var path = new TargetPath(
+                remainingWaypoints,
+                new Point2D(targetPos.X, targetPos.Y),
+                0,
+                targetSpeed);
+            
+            input = PredictionInput.WithPath(
+                new Point2D(casterPos.X, casterPos.Y),
+                path,
+                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                targetHitbox);
+        }
+    }
+    else
+    {
+        input = new PredictionInput(
+            new Point2D(casterPos.X, casterPos.Y),
+            new Point2D(targetPos.X, targetPos.Y),
+            new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+            new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+            targetHitbox);
+    }
 
     ultimateResult = ultimate.Predict(input);
 
-    // Fire skillshot with Space
-    if (Raylib.IsKeyPressed(KeyboardKey.Space) && !isFiring && ultimateResult is PredictionResult.Hit ultimateHit)
+    // Stop continuous firing with Escape
+    if (Raylib.IsKeyPressed(KeyboardKey.Escape) && continuousFiring)
     {
-        isFiring = true;
-        fireTime = 0f;
-        skillshotLaunched = false;
-        fireTargetStartPos = targetPos;
-        fireAimPos = new Vector2((float)ultimateHit.CastPosition.X, (float)ultimateHit.CastPosition.Y);
-        skillshotDir = Vector2.Normalize(fireAimPos - casterPos);
-        skillshotPos = casterPos;
-        skillshotTrail.Clear();
-        targetTrail.Clear();
-        hitResult = "";
-        collisionDisplayTimer = 0f;
+        continuousFiring = false;
+        isFiring = false;
+    }
+
+    // Fire skillshot with Space
+    if (Raylib.IsKeyPressed(KeyboardKey.Space) && !isFiring && ultimateResult is PredictionResult.Hit)
+    {
+        // Start continuous firing mode if in path mode
+        continuousFiring = pathModeActive && waypoints.Count > 0;
+        pathTotalTime = 0f;
+        
+        StartNewShot();
+    }
+    
+    // Helper to start a new shot
+    void StartNewShot()
+    {
+        // Re-run prediction from current state
+        PredictionInput shotInput;
+        if (continuousFiring && waypoints.Count > 0)
+        {
+            // Build path from current path position
+            var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+            var fullPath = new TargetPath(
+                waypointsList,
+                new Point2D(pathStartPos.X, pathStartPos.Y),
+                0,
+                targetSpeed);
+            
+            // Get current position on path
+            var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
+            
+            // Find remaining waypoints
+            double remainingDistance = targetSpeed * pathTotalTime;
+            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+            int currentWaypointIndex = 0;
+            
+            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+            {
+                var target = waypointsList[currentWaypointIndex];
+                var distanceToTarget = (target - position).Length;
+                
+                if (distanceToTarget <= remainingDistance)
+                {
+                    position = target;
+                    remainingDistance -= distanceToTarget;
+                    currentWaypointIndex++;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            // Check if path is complete
+            if (currentWaypointIndex >= waypointsList.Count)
+            {
+                // Path complete - stop continuous firing
+                continuousFiring = false;
+                isFiring = false;
+                return;
+            }
+            
+            // Create path from current position with remaining waypoints
+            var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+            var pathForPrediction = new TargetPath(
+                remainingWaypoints,
+                currentPathPos,
+                0,
+                targetSpeed);
+            
+            shotInput = PredictionInput.WithPath(
+                new Point2D(casterPos.X, casterPos.Y),
+                pathForPrediction,
+                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                targetHitbox);
+            
+            // Store full path for animation (from original start)
+            activePath = fullPath;
+        }
+        else
+        {
+            shotInput = new PredictionInput(
+                new Point2D(casterPos.X, casterPos.Y),
+                new Point2D(targetPos.X, targetPos.Y),
+                new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                targetHitbox);
+            activePath = null;
+        }
+        
+        var shotResult = ultimate.Predict(shotInput);
+        
+        if (shotResult is PredictionResult.Hit hit)
+        {
+            // DEBUG: Behind-edge / trailing edge calculation verification
+            float aimToTargetDist = Vector2.Distance(
+                new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y),
+                new Vector2((float)hit.PredictedTargetPosition.X, (float)hit.PredictedTargetPosition.Y));
+            float effectiveRadius = targetHitbox + skillshotWidth / 2;
+            float trailingEdgeDist = effectiveRadius - aimToTargetDist;  // How far inside the hitbox we're aiming
+            float casterToAimDist = Vector2.Distance(casterPos, new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y));
+            
+            Console.WriteLine($"\n=== SHOT #{hitCount + missCount + 1} ===");
+            Console.WriteLine($"Trailing edge distance: {trailingEdgeDist:F1} px (aim {aimToTargetDist:F1} from center, effective radius {effectiveRadius:F1})");
+            Console.WriteLine($"Intercept: {hit.InterceptTime:F4}s | Aim dist: {casterToAimDist:F1} | Range: {skillshotRange:F1}");
+            
+            // Store debug info for potential miss logging
+            currentShotNumber = hitCount + missCount + 1;
+            shotPathTotalTime = pathTotalTime;
+            shotCasterPos = casterPos;
+            shotTargetStartPos = targetPos;
+            shotAimPos = new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y);
+            shotPredictedTargetPos = new Vector2((float)hit.PredictedTargetPosition.X, (float)hit.PredictedTargetPosition.Y);
+            shotInterceptTime = hit.InterceptTime;
+            shotConfidence = hit.Confidence;
+            shotWaypoints = continuousFiring && waypoints.Count > 0 ? new List<Vector2>(waypoints) : new List<Vector2>();
+            
+            // Store path position info
+            if (continuousFiring && waypoints.Count > 0)
+            {
+                var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+                var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
+                var currentPos = fullPath.GetPositionAtTime(pathTotalTime);
+                shotCurrentPathPos = new Vector2((float)currentPos.X, (float)currentPos.Y);
+                
+                // Find current segment
+                double remainingDist = targetSpeed * pathTotalTime;
+                var pos = new Point2D(pathStartPos.X, pathStartPos.Y);
+                int wpIdx = 0;
+                while (remainingDist > 0 && wpIdx < waypointsList.Count)
+                {
+                    var tgt = waypointsList[wpIdx];
+                    var dist = (tgt - pos).Length;
+                    if (dist <= remainingDist)
+                    {
+                        pos = tgt;
+                        remainingDist -= dist;
+                        wpIdx++;
+                    }
+                    else break;
+                }
+                shotCurrentWaypointIndex = wpIdx;
+                shotPrevWaypoint = wpIdx == 0 ? pathStartPos : waypoints[wpIdx - 1];
+                shotNextWaypoint = wpIdx < waypoints.Count ? waypoints[wpIdx] : waypoints[^1];
+            }
+            else
+            {
+                shotCurrentPathPos = Vector2.Zero;
+                shotPrevWaypoint = Vector2.Zero;
+                shotNextWaypoint = Vector2.Zero;
+                shotCurrentWaypointIndex = -1;
+            }
+            
+            isFiring = true;
+            fireTime = 0f;
+            skillshotLaunched = false;
+            fireTargetStartPos = targetPos;
+            fireAimPos = new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y);
+            skillshotDir = Vector2.Normalize(fireAimPos - casterPos);
+            skillshotPos = casterPos;
+            skillshotTrail.Clear();
+            hitResult = "";
+            collisionDisplayTimer = 0f;
+        }
+        else
+        {
+            // Can't hit - stop continuous firing
+            Console.WriteLine($"\n=== PREDICTION FAILED - Stopping continuous fire ===");
+            Console.WriteLine($"pathTotalTime: {pathTotalTime:F4}s");
+            Console.WriteLine($"pathStartPos: ({pathStartPos.X:F1}, {pathStartPos.Y:F1})");
+            Console.WriteLine($"Caster: ({casterPos.X:F1}, {casterPos.Y:F1})");
+            if (shotResult is PredictionResult.OutOfRange oor)
+            {
+                Console.WriteLine($"Result: OutOfRange - Distance: {oor.Distance:F1}, MaxRange: {oor.MaxRange:F1}");
+            }
+            else if (shotResult is PredictionResult.Unreachable)
+            {
+                Console.WriteLine($"Result: Unreachable");
+            }
+            else
+            {
+                Console.WriteLine($"Result: {shotResult?.GetType().Name ?? "null"}");
+            }
+            if (continuousFiring && waypoints.Count > 0)
+            {
+                var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+                var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
+                var currentPos = fullPath.GetPositionAtTime(pathTotalTime);
+                Console.WriteLine($"Current path pos: ({currentPos.X:F1}, {currentPos.Y:F1})");
+                Console.WriteLine($"Distance from caster to path pos: {Vector2.Distance(casterPos, new Vector2((float)currentPos.X, (float)currentPos.Y)):F1}");
+                
+                // Show remaining waypoints that were passed to prediction
+                double remainingDistance = targetSpeed * pathTotalTime;
+                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+                int currentWaypointIndex = 0;
+                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+                {
+                    var target = waypointsList[currentWaypointIndex];
+                    var distanceToTarget = (target - position).Length;
+                    if (distanceToTarget <= remainingDistance)
+                    {
+                        position = target;
+                        remainingDistance -= distanceToTarget;
+                        currentWaypointIndex++;
+                    }
+                    else break;
+                }
+                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+                Console.WriteLine($"currentWaypointIndex: {currentWaypointIndex}");
+                Console.WriteLine($"Remaining waypoints passed to prediction: {string.Join(" -> ", remainingWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
+                Console.WriteLine($"Full waypoints: {string.Join(" -> ", waypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
+            }
+            continuousFiring = false;
+            isFiring = false;
+        }
     }
 
     // Update firing animation
     if (isFiring)
     {
         fireTime += dt;
-        var animTargetPos = fireTargetStartPos + targetVelocity * targetSpeed * fireTime;
-
-        // Add to trail
-        if (targetTrail.Count == 0 || Vector2.Distance(targetTrail[^1], animTargetPos) > 5)
-            targetTrail.Add(animTargetPos);
-        if (targetTrail.Count > 50) targetTrail.RemoveAt(0);
+        
+        // Calculate target position - use path if available, otherwise linear velocity
+        Vector2 animTargetPos;
+        if (activePath != null)
+        {
+            // In continuous mode, use total path time; otherwise just fireTime
+            float pathTime = continuousFiring ? pathTotalTime + fireTime : fireTime;
+            var pathPos = activePath.GetPositionAtTime(pathTime);
+            animTargetPos = new Vector2((float)pathPos.X, (float)pathPos.Y);
+        }
+        else
+        {
+            animTargetPos = fireTargetStartPos + targetVelocity * targetSpeed * fireTime;
+        }
+        
+        // Store for drawing
+        currentAnimTargetPos = animTargetPos;
 
         // Launch skillshot after delay
         if (fireTime >= skillshotDelay && !skillshotLaunched)
@@ -213,38 +520,105 @@ while (!Raylib.WindowShouldClose())
                 skillshotTrail.Add(skillshotPos);
             if (skillshotTrail.Count > 30) skillshotTrail.RemoveAt(0);
 
+            float travelDist = Vector2.Distance(casterPos, skillshotPos);
+
             // Check collision
             float collisionDist = (skillshotWidth / 2) + targetHitbox;
             if (Vector2.Distance(skillshotPos, animTargetPos) <= collisionDist)
             {
                 hitResult = "HIT!";
-                hitResultTimer = 3f;
+                hitResultTimer = 1f;
                 hitCount++;
-                isFiring = false;
                 targetPos = animTargetPos;
                 collisionPos = (skillshotPos + animTargetPos) / 2;
                 collisionTime = fireTime;
-                collisionDisplayTimer = 5f;
+                collisionDisplayTimer = 2f;
+                
+                // Update path time and continue if in continuous mode
+                if (continuousFiring)
+                {
+                    pathTotalTime += fireTime;
+                    StartNewShot();
+                }
+                else
+                {
+                    isFiring = false;
+                }
             }
-
-            // Check range
-            float travelDist = Vector2.Distance(casterPos, skillshotPos);
-            if (travelDist > skillshotRange)
+            // Check range (only if no collision)
+            else if (travelDist > skillshotRange)
             {
                 hitResult = "MISS";
-                hitResultTimer = 2f;
+                hitResultTimer = 1f;
                 missCount++;
-                isFiring = false;
                 targetPos = animTargetPos;
+                
+                // Log debug info on miss
+                Console.WriteLine($"\n=== MISS - SHOT #{currentShotNumber} ===");
+                Console.WriteLine($"pathTotalTime: {shotPathTotalTime:F4}s");
+                Console.WriteLine($"Caster: ({shotCasterPos.X:F1}, {shotCasterPos.Y:F1})");
+                Console.WriteLine($"Target start (UI): ({shotTargetStartPos.X:F1}, {shotTargetStartPos.Y:F1})");
+                Console.WriteLine($"Current path pos: ({shotCurrentPathPos.X:F1}, {shotCurrentPathPos.Y:F1})");
+                Console.WriteLine($"Prev waypoint: ({shotPrevWaypoint.X:F1}, {shotPrevWaypoint.Y:F1})");
+                Console.WriteLine($"Next waypoint [{shotCurrentWaypointIndex}]: ({shotNextWaypoint.X:F1}, {shotNextWaypoint.Y:F1})");
+                Console.WriteLine($"CastPosition (aim): ({shotAimPos.X:F1}, {shotAimPos.Y:F1})");
+                Console.WriteLine($"PredictedTargetPos: ({shotPredictedTargetPos.X:F1}, {shotPredictedTargetPos.Y:F1})");
+                Console.WriteLine($"InterceptTime: {shotInterceptTime:F4}s");
+                Console.WriteLine($"Confidence: {shotConfidence:F2}");
+                Console.WriteLine($"Actual target pos at miss: ({animTargetPos.X:F1}, {animTargetPos.Y:F1})");
+                Console.WriteLine($"Skillshot pos at miss: ({skillshotPos.X:F1}, {skillshotPos.Y:F1})");
+                Console.WriteLine($"Travel distance: {travelDist:F1} (range: {skillshotRange:F1})");
+                Console.WriteLine($"Distance to target: {Vector2.Distance(skillshotPos, animTargetPos):F1}");
+                if (shotWaypoints.Count > 0)
+                {
+                    Console.WriteLine($"Waypoints: {string.Join(" -> ", shotWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
+                }
+                
+                // Update path time and continue if in continuous mode
+                if (continuousFiring)
+                {
+                    pathTotalTime += fireTime;
+                    StartNewShot();
+                }
+                else
+                {
+                    isFiring = false;
+                }
             }
         }
 
         if (fireTime > 5f)
         {
             hitResult = "TIMEOUT";
-            hitResultTimer = 2f;
+            hitResultTimer = 1f;
             missCount++;
-            isFiring = false;
+            
+            // Log debug info on timeout (also a miss)
+            Console.WriteLine($"\n=== TIMEOUT - SHOT #{currentShotNumber} ===");
+            Console.WriteLine($"pathTotalTime: {shotPathTotalTime:F4}s");
+            Console.WriteLine($"Caster: ({shotCasterPos.X:F1}, {shotCasterPos.Y:F1})");
+            Console.WriteLine($"Target start (UI): ({shotTargetStartPos.X:F1}, {shotTargetStartPos.Y:F1})");
+            Console.WriteLine($"Current path pos: ({shotCurrentPathPos.X:F1}, {shotCurrentPathPos.Y:F1})");
+            Console.WriteLine($"Prev waypoint: ({shotPrevWaypoint.X:F1}, {shotPrevWaypoint.Y:F1})");
+            Console.WriteLine($"Next waypoint [{shotCurrentWaypointIndex}]: ({shotNextWaypoint.X:F1}, {shotNextWaypoint.Y:F1})");
+            Console.WriteLine($"CastPosition (aim): ({shotAimPos.X:F1}, {shotAimPos.Y:F1})");
+            Console.WriteLine($"PredictedTargetPos: ({shotPredictedTargetPos.X:F1}, {shotPredictedTargetPos.Y:F1})");
+            Console.WriteLine($"InterceptTime: {shotInterceptTime:F4}s");
+            Console.WriteLine($"Confidence: {shotConfidence:F2}");
+            if (shotWaypoints.Count > 0)
+            {
+                Console.WriteLine($"Waypoints: {string.Join(" -> ", shotWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
+            }
+            
+            if (continuousFiring)
+            {
+                pathTotalTime += fireTime;
+                StartNewShot();
+            }
+            else
+            {
+                isFiring = false;
+            }
         }
     }
 
@@ -290,18 +664,9 @@ while (!Raylib.WindowShouldClose())
     // Draw firing animation
     if (isFiring)
     {
-        var animTargetPos = fireTargetStartPos + targetVelocity * targetSpeed * fireTime;
-
-        // Target trail
-        for (int i = 0; i < targetTrail.Count - 1; i++)
-        {
-            float alpha = (float)i / targetTrail.Count;
-            Raylib.DrawCircleV(targetTrail[i], 8, new Color((byte)255, (byte)100, (byte)100, (byte)(alpha * 100)));
-        }
-
-        // Animated target
-        Raylib.DrawCircleV(animTargetPos, targetHitbox, new Color(255, 80, 80, 200));
-        Raylib.DrawCircleLinesV(animTargetPos, targetHitbox, Color.White);
+        // Animated target (use the stored position from update loop)
+        Raylib.DrawCircleV(currentAnimTargetPos, targetHitbox, new Color(255, 80, 80, 200));
+        Raylib.DrawCircleLinesV(currentAnimTargetPos, targetHitbox, Color.White);
 
         // Skillshot trail
         for (int i = 0; i < skillshotTrail.Count - 1; i++)
@@ -344,13 +709,43 @@ while (!Raylib.WindowShouldClose())
     // Draw target
     if (!isFiring)
     {
+        // Draw path and waypoints if in path mode
+        if (pathModeActive && waypoints.Count > 0)
+        {
+            // Draw path lines
+            var prevPos = targetPos;
+            foreach (var wp in waypoints)
+            {
+                Raylib.DrawLineEx(prevPos, wp, 3, new Color(100, 200, 255, 150));
+                prevPos = wp;
+            }
+            
+            // Draw waypoint markers
+            for (int i = 0; i < waypoints.Count; i++)
+            {
+                var wp = waypoints[i];
+                Raylib.DrawCircleV(wp, 12, new Color(100, 200, 255, 200));
+                Raylib.DrawCircleLinesV(wp, 14, Color.White);
+                // Draw waypoint number
+                Raylib.DrawText($"{i + 1}", (int)wp.X - 4, (int)wp.Y - 6, 14, Color.White);
+            }
+        }
+        
         Raylib.DrawCircleV(targetPos, targetHitbox, new Color(255, 80, 80, 200));
         Raylib.DrawCircleLinesV(targetPos, targetHitbox, Color.White);
 
-        if (targetVelocity.LengthSquared() > 0)
+        // Draw velocity arrow only in non-path mode
+        if (!pathModeActive && targetVelocity.LengthSquared() > 0)
         {
             var velEnd = targetPos + Vector2.Normalize(targetVelocity) * 100;
             DrawArrow(targetPos, velEnd, new Color(255, 200, 100, 255));
+        }
+        // In path mode, draw arrow toward first waypoint
+        else if (pathModeActive && waypoints.Count > 0)
+        {
+            var dirToWp = Vector2.Normalize(waypoints[0] - targetPos);
+            var arrowEnd = targetPos + dirToWp * 80;
+            DrawArrow(targetPos, arrowEnd, new Color(100, 200, 255, 255));
         }
     }
 
@@ -368,7 +763,7 @@ while (!Raylib.WindowShouldClose())
     // UI (screen space)
     DrawUI(arialFont, ultimateResult, targetSpeed, skillshotSpeed, skillshotRange,
            presets[currentPreset].Name, hitCount, missCount, camera.Zoom,
-           timeLabels, currentTimeIndex);
+           timeLabels, currentTimeIndex, pathModeActive, waypoints.Count);
 
     // Collision info overlay
     if (collisionDisplayTimer > 0)
@@ -389,16 +784,50 @@ static void HandleInput(ref Vector2 casterPos, ref Vector2 targetPos, ref Vector
                        ref float targetSpeed, ref float skillshotSpeed, ref float skillshotRange,
                        ref float skillshotWidth, ref float skillshotDelay,
                        (string, Vector2, float, float, float, float)[] presets, ref int currentPreset,
-                       bool isFiring, Vector2 mouseWorld)
+                       bool isFiring, Vector2 mouseWorld, List<Vector2> waypoints, ref bool pathModeActive,
+                       ref Vector2 pathStartPos, ref float pathElapsedTime)
 {
     if (isFiring) return;
+
+    bool shiftHeld = Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift);
+
+    // Shift+RMB adds waypoint (path mode)
+    if (Raylib.IsMouseButtonPressed(MouseButton.Right) && shiftHeld)
+    {
+        // First waypoint - record starting position
+        if (waypoints.Count == 0)
+        {
+            pathStartPos = targetPos;
+            pathElapsedTime = 0f;
+        }
+        waypoints.Add(mouseWorld);
+        pathModeActive = true;
+    }
+    // Regular RMB (without shift) moves target and clears path mode
+    else if (Raylib.IsMouseButtonDown(MouseButton.Right) && !shiftHeld)
+    {
+        targetPos = mouseWorld;
+        // Clear waypoints when moving target directly
+        if (waypoints.Count > 0)
+        {
+            waypoints.Clear();
+            pathModeActive = false;
+            pathElapsedTime = 0f;
+        }
+    }
 
     if (Raylib.IsMouseButtonDown(MouseButton.Left))
         casterPos = mouseWorld;
 
-    if (Raylib.IsMouseButtonDown(MouseButton.Right))
-        targetPos = mouseWorld;
+    // Delete clears all waypoints
+    if (Raylib.IsKeyPressed(KeyboardKey.Delete) || Raylib.IsKeyPressed(KeyboardKey.Backspace))
+    {
+        waypoints.Clear();
+        pathModeActive = false;
+        pathElapsedTime = 0f;
+    }
 
+    // Arrow keys set velocity direction (only used in non-path mode)
     if (Raylib.IsKeyPressed(KeyboardKey.Up)) targetVelocity = new Vector2(0, -1);
     if (Raylib.IsKeyPressed(KeyboardKey.Down)) targetVelocity = new Vector2(0, 1);
     if (Raylib.IsKeyPressed(KeyboardKey.Left)) targetVelocity = new Vector2(-1, 0);
@@ -526,7 +955,7 @@ static void DrawLinearSkillshotOutline(Vector2 center, Vector2 direction, float 
 static void DrawUI(Font font, PredictionResult? ultimateResult,
                   float targetSpeed, float skillshotSpeed, float skillshotRange,
                   string presetName, int hits, int misses, float zoom,
-                  string[] timeLabels, int currentTimeIndex)
+                  string[] timeLabels, int currentTimeIndex, bool pathModeActive, int waypointCount)
 {
     int y = 20;
     int lineHeight = 26;
@@ -544,6 +973,11 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     y += 30;
 
     Raylib.DrawTextEx(font, $"Preset: {presetName}", new Vector2(20, y), smallFont, spacing, Color.Yellow);
+    // Path mode indicator
+    if (pathModeActive)
+    {
+        Raylib.DrawTextEx(font, $"  PATH MODE ({waypointCount} pts)", new Vector2(200, y), smallFont, spacing, new Color(100, 200, 255, 255));
+    }
     y += lineHeight;
 
     Raylib.DrawTextEx(font, $"Target: {targetSpeed:F0}  Projectile: {skillshotSpeed:F0}  Range: {skillshotRange:F0}", new Vector2(20, y), smallFont, spacing, Color.LightGray);
@@ -608,14 +1042,16 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
 
     // Controls panel
     int ctrlY = 220;
-    Raylib.DrawRectangle(10, ctrlY, 420, 110, new Color(0, 0, 0, 200));
-    Raylib.DrawRectangleLines(10, ctrlY, 420, 110, new Color(80, 80, 100, 255));
+    Raylib.DrawRectangle(10, ctrlY, 420, 135, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, ctrlY, 420, 135, new Color(80, 80, 100, 255));
 
     Raylib.DrawTextEx(font, "CONTROLS", new Vector2(20, ctrlY + 8), fontSize, spacing, Color.White);
     ctrlY += 28;
     Raylib.DrawTextEx(font, "LMB/RMB : Move caster/target", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
     ctrlY += lineHeight;
-    Raylib.DrawTextEx(font, "Arrows : Direction  |  Wheel : Zoom", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
+    Raylib.DrawTextEx(font, "Shift+RMB : Add waypoint (path mode)", new Vector2(20, ctrlY), smallFont, spacing, new Color(100, 200, 255, 255));
+    ctrlY += lineHeight;
+    Raylib.DrawTextEx(font, "DEL/Backspace : Clear waypoints", new Vector2(20, ctrlY), smallFont, spacing, new Color(100, 200, 255, 255));
     ctrlY += lineHeight;
     Raylib.DrawTextEx(font, "TAB : Skills  |  Q/W E/R : Speed", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
 }
