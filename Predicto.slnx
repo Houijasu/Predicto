@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Predicto.Simulation/Predicto.Simulation.csproj" />
+    <Project Path="src/Predicto/Predicto.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Predicto.Tests/Predicto.Tests.csproj" />
+  </Folder>
+</Solution>
