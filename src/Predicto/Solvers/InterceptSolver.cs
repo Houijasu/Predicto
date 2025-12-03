@@ -335,22 +335,19 @@ public sealed class InterceptSolver
         // Calculate max prediction time based on skillshot parameters
         double maxPredictionTime = castDelay + skillshotRange / skillshotSpeed;
 
-        // Time factor: exponential decay - uncertainty grows exponentially with time
-        // Weight: 0.5 (highest - time is most important for prediction accuracy)
+        // Time factor: exponential decay - uncertainty grows with time
         double timeFactor = Math.Exp(-interceptTime / maxPredictionTime);
 
         // Speed factor: slower targets relative to skillshot are more predictable
-        // Weight: 0.3
         double speedFactor = 1.0 / (1.0 + targetSpeed / (skillshotSpeed + Constants.Epsilon));
 
         // Range factor: closer targets are more predictable
-        // Weight: 0.2
         double rangeFactor = Math.Max(0, 1.0 - distance / skillshotRange);
 
-        // Weighted sum combination
-        double confidence = 0.5 * timeFactor + 0.3 * speedFactor + 0.2 * rangeFactor;
+        // Equal weights: 1/2 time, 1/4 speed, 1/4 range (simplified from 0.5, 0.3, 0.2)
+        double confidence = 0.5 * timeFactor + 0.5 * (speedFactor + rangeFactor) * 0.5;
 
-        return Math.Clamp(confidence, 0.1, 1.0);
+        return Math.Clamp(confidence, Constants.Epsilon, 1.0);
     }
 
     /// <summary>
@@ -525,7 +522,7 @@ public sealed class InterceptSolver
             // Step 2: Refine with bisection around the quadratic result
             // Use a narrow bracket around the initial estimate for fast convergence
             double estimate = quadraticResult.Value;
-            double bracketSize = Math.Max(0.1, (maxTime - castDelay) * 0.1); // 10% of time range or 0.1s
+            double bracketSize = Math.Max(Constants.TickDuration, (maxTime - castDelay) / 2); // Half time range or 1 tick
             double tLow = Math.Max(castDelay, estimate - bracketSize);
             double tHigh = Math.Min(maxTime, estimate + bracketSize);
 
@@ -845,7 +842,7 @@ public sealed class InterceptSolver
         {
             // Step 2: Refine with bisection around the quadratic result
             double estimate = quadraticResult.Value;
-            double bracketSize = Math.Max(0.1, (maxTime - castDelay) * 0.1);
+            double bracketSize = Math.Max(Constants.TickDuration, (maxTime - castDelay) / 2);
             double tLow = Math.Max(castDelay, estimate - bracketSize);
             double tHigh = Math.Min(maxTime, estimate + bracketSize);
 
@@ -963,9 +960,8 @@ public sealed class InterceptSolver
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
 
         // IMPORTANT: Margin must be less than effectiveRadius for the math to work.
-        // If margin >= effectiveRadius, the "behind edge" concept breaks down
-        // (no room inside the collision zone). Clamp to 90% of effectiveRadius.
-        margin = Math.Min(margin, effectiveRadius * 0.9);
+        // Clamp to leave at least 1 unit inside collision zone.
+        margin = Math.Min(margin, effectiveRadius - 1);
         double maxTime = castDelay + (skillshotRange + effectiveRadius) / skillshotSpeed;
 
         var displacement = targetPosition - casterPosition;
@@ -1088,9 +1084,8 @@ public sealed class InterceptSolver
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
 
         // IMPORTANT: Margin must be less than effectiveRadius for the math to work.
-        // If margin >= effectiveRadius, the "behind edge" concept breaks down
-        // (no room inside the collision zone). Clamp to 90% of effectiveRadius.
-        margin = Math.Min(margin, effectiveRadius * 0.9);
+        // Clamp to leave at least 1 unit inside collision zone.
+        margin = Math.Min(margin, effectiveRadius - 1);
 
         // Get trailing edge estimate from quadratic solver
         double? trailingEstimate = SolveEdgeInterceptTimeTrailing(
@@ -1112,7 +1107,7 @@ public sealed class InterceptSolver
         {
             // Refine around the trailing estimate using margin
             double estimate = trailingEstimate.Value;
-            double bracketSize = Math.Max(0.05, (maxTime - castDelay) * 0.05);
+            double bracketSize = Math.Max(Constants.TickDuration, (maxTime - castDelay) / 2);
 
             // Search slightly before trailing edge
             double tLow = Math.Max(castDelay, estimate - bracketSize);
@@ -1230,14 +1225,14 @@ public sealed class InterceptSolver
         // This represents how far "behind" the target center we aim.
         // 
         // After margin clamping above (margin <= 0.9 * effectiveRadius), behindDistance
-        // should always be >= 0.1 * effectiveRadius. The defensive check below handles
+        // should always be >= 0.5 * effectiveRadius. The defensive check below handles
         // any edge cases from floating-point arithmetic or future code changes.
         double behindDistance = effectiveRadius - behindMargin;
         if (behindDistance < Constants.Epsilon)
         {
             // Fallback: if somehow behindDistance is negligible, use a minimal offset
             // This preserves the "behind target" intent rather than degenerating to center aim
-            behindDistance = effectiveRadius * 0.1;
+            behindDistance = effectiveRadius * 0.5;
         }
         
         Vector2D moveDirection = targetVelocity.Normalize();
@@ -1487,7 +1482,7 @@ public sealed class InterceptSolver
         double behindDistance = effectiveRadius - behindMargin;
         if (behindDistance < Constants.Epsilon)
         {
-            behindDistance = effectiveRadius * 0.1;
+            behindDistance = effectiveRadius * 0.5;
         }
         
         Vector2D moveDirection = targetVelocity.Normalize();
@@ -1543,7 +1538,7 @@ public sealed class InterceptSolver
         double skillshotSpeed,
         double castDelay,
         double estimate,
-        double bracketSize = 0.01,
+        double bracketSize = Constants.TickDuration,
         double tolerance = 1e-15,
         int maxIterations = 60)
     {
@@ -1666,7 +1661,7 @@ public sealed class InterceptSolver
             skillshotSpeed,
             castDelay,
             secantRefined,
-            bracketSize: 0.001, // Small bracket since Secant already refined
+            bracketSize: Constants.TickDuration, // 1 tick bracket for final refinement
             tolerance: bisectionTolerance);
 
         // Validate refined result is within range
@@ -1731,7 +1726,7 @@ public sealed class InterceptSolver
         double behindDistance = effectiveRadius - behindMargin;
         if (behindDistance < Constants.Epsilon)
         {
-            behindDistance = effectiveRadius * 0.1;
+            behindDistance = effectiveRadius * 0.5;
         }
         
         Vector2D moveDirection = targetVelocity.Normalize();
@@ -1967,7 +1962,7 @@ public sealed class InterceptSolver
             throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
 
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
-        behindMargin = Math.Min(behindMargin, effectiveRadius * 0.9);
+        behindMargin = Math.Min(behindMargin, effectiveRadius - 1);
         double behindDistance = effectiveRadius - behindMargin;
 
         if (path.Speed < Constants.MinVelocity)
@@ -2239,7 +2234,7 @@ public sealed class InterceptSolver
         var D = new Vector2D(segmentStart.X - casterPosition.X, segmentStart.Y - casterPosition.Y);
         var V = segmentVelocity;
         
-        double maxSolveTime = maxTime - minTime + 0.1;
+        double maxSolveTime = maxTime - minTime + 1.0;
 
         // Handle stationary case
         if (V.Length < Constants.MinVelocity)
@@ -2503,8 +2498,8 @@ public sealed class InterceptSolver
 
         double effectiveRadius = spellRadius + targetHitboxRadius;
 
-        // Clamp margin to avoid going past center
-        behindMargin = Math.Min(behindMargin, effectiveRadius * 0.9);
+        // Clamp margin to leave at least 1 unit inside
+        behindMargin = Math.Min(behindMargin, effectiveRadius - 1);
 
         // Predict target position at detonation time
         Point2D predictedPosition = targetPosition + targetVelocity * castDelay;
@@ -2528,7 +2523,7 @@ public sealed class InterceptSolver
         double behindDistance = effectiveRadius - behindMargin;
         if (behindDistance < Constants.Epsilon)
         {
-            behindDistance = effectiveRadius * 0.1;
+            behindDistance = effectiveRadius * 0.5;
         }
 
         // Direction opposite to target movement
@@ -2614,7 +2609,7 @@ public sealed class InterceptSolver
             throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
 
         double effectiveRadius = spellRadius + targetHitboxRadius;
-        behindMargin = Math.Min(behindMargin, effectiveRadius * 0.9);
+        behindMargin = Math.Min(behindMargin, effectiveRadius - 1);
 
         // Get position at detonation time
         Point2D predictedPosition = path.GetPositionAtTime(castDelay);
@@ -2640,7 +2635,7 @@ public sealed class InterceptSolver
         double behindDistance = effectiveRadius - behindMargin;
         if (behindDistance < Constants.Epsilon)
         {
-            behindDistance = effectiveRadius * 0.1;
+            behindDistance = effectiveRadius * 0.5;
         }
 
         Vector2D moveDirection = velocityAtDetonation.Normalize();
@@ -2686,7 +2681,7 @@ public sealed class InterceptSolver
         double effectiveRadius = spellRadius + targetHitboxRadius;
 
         // Delay factor: longer delays = more uncertainty
-        // Exponential decay with time constant based on delay
+        // Exponential decay with time constant of 2 seconds
         double delayFactor = Math.Exp(-castDelay / 2.0);
 
         // Speed/radius factor: fast targets relative to spell size are harder
@@ -2694,10 +2689,10 @@ public sealed class InterceptSolver
         double travelDuringDelay = targetSpeed * castDelay;
         double coverageRatio = effectiveRadius / (travelDuringDelay + effectiveRadius);
 
-        // Combine factors
-        double confidence = 0.6 * delayFactor + 0.4 * coverageRatio;
+        // Equal weight combination (0.5 + 0.5)
+        double confidence = 0.5 * delayFactor + 0.5 * coverageRatio;
 
-        return Math.Clamp(confidence, 0.1, 1.0);
+        return Math.Clamp(confidence, Constants.Epsilon, 1.0);
     }
 
     #endregion

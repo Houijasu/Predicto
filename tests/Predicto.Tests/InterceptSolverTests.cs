@@ -928,7 +928,7 @@ public class InterceptSolverTests
 
     /// <summary>
     /// Tests that Secant refinement works correctly when initialGuess is very close to castDelay.
-    /// This tests the fix for the t1 clamping issue where t1 could be <= castDelay.
+    /// This tests the fix for the t1 clamping issue where t1 could be less than or equal to castDelay.
     /// </summary>
     [Fact]
     public void SecantRefinement_InitialGuessNearCastDelay_DoesNotFail()

@@ -152,7 +152,7 @@ public sealed class Ultimate : IPrediction
         if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
         {
             int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
-            double waypointPenalty = Math.Pow(0.9, waypointDelta); // 10% reduction per waypoint
+            double waypointPenalty = Math.Pow(0.5, waypointDelta); // 50% reduction per waypoint
             confidence *= waypointPenalty;
         }
 
@@ -163,9 +163,9 @@ public sealed class Ultimate : IPrediction
         if (remainingPathTime > Constants.Epsilon)
         {
             double segmentProgress = interceptResult.InterceptTime / remainingPathTime;
-            // Apply mild penalty for predictions deep into the path (exponential decay)
-            // At 100% path progress: 0.85x confidence, at 50%: ~0.92x
-            double segmentPenalty = Math.Exp(-0.16 * segmentProgress);
+            // Apply mild penalty for predictions deep into the path (linear decay)
+            // At 100% path progress: 0.5x confidence, at 50%: 0.75x
+            double segmentPenalty = 1 - 0.5 * segmentProgress;
             confidence *= segmentPenalty;
         }
 
@@ -173,7 +173,7 @@ public sealed class Ultimate : IPrediction
             CastPosition: interceptResult.AimPoint,
             PredictedTargetPosition: interceptResult.PredictedTargetPosition,
             InterceptTime: interceptResult.InterceptTime,
-            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
     }
 
     /// <summary>
@@ -330,12 +330,8 @@ public sealed class Ultimate : IPrediction
         Vector2D targetVelocity,
         double skillshotSpeed)
     {
-        // Close range shots are easy
-        if (distance < Constants.EasyShotDistanceThreshold)
-            return true;
-
-        // Slow targets are easy
-        if (targetSpeed < skillshotSpeed * 0.1)
+        // Slow targets are easy (target moves less than half a tick's worth per skillshot tick)
+        if (targetSpeed < skillshotSpeed * 0.5 / Constants.ServerTickRate)
             return true;
 
         // Target moving toward caster (easier to hit)
@@ -368,49 +364,16 @@ public sealed class Ultimate : IPrediction
         double skillshotWidth,
         double effectiveRadius)
     {
-        // Base margin: minimum for numerical stability
-        const double baseMargin = 0.1;
+        // Maximum aggressiveness: aim as close to the trailing edge as possible
+        // LoL uses swept collision detection between ticks, so even edge hits register
         
         // For very small effective radii, scale proportionally
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
         
-        // === Speed-based uncertainty ===
-        // Faster targets have more prediction uncertainty
-        // Scale: 0 at rest, up to ~2 pixels at max reasonable velocity
-        double speedUncertainty = targetSpeed / Constants.MaxReasonableVelocity * 2.0;
-        
-        // === Distance-based uncertainty ===
-        // Longer flight times accumulate more error
-        // Estimate flight time and scale uncertainty
-        double estimatedFlightTime = distance / skillshotSpeed;
-        double distanceUncertainty = estimatedFlightTime * 0.5; // ~0.5 pixels per second of flight
-        
-        // === Speed ratio factor ===
-        // When target speed approaches skillshot speed, prediction becomes unstable
-        // (the quadratic discriminant approaches zero, amplifying numerical errors)
-        double speedRatio = targetSpeed / (skillshotSpeed + Constants.Epsilon);
-        double ratioUncertainty = 0.0;
-        if (speedRatio > 0.7)
-        {
-            // Exponential increase as we approach equal speeds
-            ratioUncertainty = Math.Pow((speedRatio - 0.7) / 0.3, 2) * 3.0;
-        }
-        
-        // Combine uncertainties (not additive - use RMS-like combination)
-        double totalUncertainty = Math.Sqrt(
-            speedUncertainty * speedUncertainty + 
-            distanceUncertainty * distanceUncertainty + 
-            ratioUncertainty * ratioUncertainty);
-        
-        // Calculate final margin
-        double margin = baseMargin + totalUncertainty;
-        
-        // Clamp to reasonable bounds
-        double minMargin = effectiveRadius * Constants.MinAdaptiveMarginFraction;
-        double maxMargin = effectiveRadius * Constants.MaxAdaptiveMarginFraction;
-        
-        return Math.Clamp(margin, minMargin, maxMargin);
+        // Use epsilon margin for pixel-perfect trailing edge hits
+        // This is maximally aggressive - essentially aiming at the exact edge
+        return Constants.Epsilon;
     }
 
     /// <summary>
@@ -437,47 +400,33 @@ public sealed class Ultimate : IPrediction
 
         // === Approach Angle Factor ===
         // Targets moving perpendicular to skillshot path are harder to predict
-        // (they might suddenly stop or reverse)
+        // Use cosine directly: 1 = parallel (predictable), 0 = perpendicular (unpredictable)
         double approachAngleFactor = 1.0;
         if (targetSpeed > Constants.MinVelocity && displacement.Length > Constants.Epsilon)
         {
-            // Calculate angle between displacement and velocity
             double displacementLength = displacement.Length;
             double velocityLength = targetVelocity.Length;
             
             if (displacementLength > Constants.Epsilon && velocityLength > Constants.Epsilon)
             {
                 double dotProduct = displacement.DotProduct(targetVelocity);
-                double cosAngle = dotProduct / (displacementLength * velocityLength);
-                cosAngle = Math.Clamp(cosAngle, -1.0, 1.0);
-                double angle = Math.Acos(Math.Abs(cosAngle));
-
-                // Perpendicular movement (angle near 90°) reduces confidence
-                // Parallel movement (toward or away) is more predictable
-                if (angle > Constants.GrazingAngleThreshold)
-                {
-                    // Reduce confidence for grazing angles
-                    approachAngleFactor = 0.7 + 0.3 * (1.0 - (angle - Constants.GrazingAngleThreshold) / (Math.PI / 2 - Constants.GrazingAngleThreshold));
-                    approachAngleFactor = Math.Max(approachAngleFactor, 0.5);
-                }
+                double cosAngle = Math.Abs(dotProduct / (displacementLength * velocityLength));
+                
+                // Scale confidence: perpendicular (cos=0) → 0.5, parallel (cos=1) → 1.0
+                approachAngleFactor = 0.5 + 0.5 * cosAngle;
             }
         }
 
         // === Movement Consistency Factor ===
-        // Targets moving at consistent speed in consistent direction are more predictable
-        // This is a simplified version - real implementation would track historical data
-        double consistencyFactor = 1.0;
-        
-        // Very high speeds suggest dashes/abilities - less predictable
-        if (targetSpeed > 500)
-        {
-            consistencyFactor = Math.Max(0.6, 1.0 - (targetSpeed - 500) / 1500);
-        }
+        // Higher speeds relative to max suggest dashes/abilities - less predictable
+        // Scale: at max velocity → 0.5x confidence
+        double speedRatio = targetSpeed / Constants.MaxReasonableVelocity;
+        double consistencyFactor = 1.0 - speedRatio * 0.5;
 
         // Combine factors
         double enhancedConfidence = baseConfidence * approachAngleFactor * consistencyFactor;
 
-        return Math.Clamp(enhancedConfidence, 0.1, 1.0);
+        return Math.Clamp(enhancedConfidence, Constants.Epsilon, 1.0);
     }
 
     /// <summary>
@@ -586,7 +535,7 @@ public sealed class Ultimate : IPrediction
         if (remainingPathTime > Constants.Epsilon && input.Skillshot.Delay > 0)
         {
             double pathProgress = input.Skillshot.Delay / remainingPathTime;
-            double pathPenalty = Math.Exp(-0.2 * pathProgress);
+            double pathPenalty = 1 - 0.5 * pathProgress;
             confidence *= pathPenalty;
         }
 
@@ -594,7 +543,7 @@ public sealed class Ultimate : IPrediction
             CastPosition: interceptResult.CastPosition,
             PredictedTargetPosition: interceptResult.PredictedTargetPosition,
             InterceptTime: interceptResult.DetonationTime,
-            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
     }
 
     /// <summary>
@@ -658,8 +607,8 @@ public sealed class Ultimate : IPrediction
             cosAngle = Math.Clamp(cosAngle, -1.0, 1.0);
             
             // Targets moving toward/away from caster are easier to predict
-            // Targets moving perpendicular are harder
-            double angleFactor = 0.7 + 0.3 * Math.Abs(cosAngle);
+            // Targets moving perpendicular are harder (use same formula as linear)
+            double angleFactor = 0.5 + 0.5 * Math.Abs(cosAngle);
             confidence *= angleFactor;
         }
 
@@ -667,7 +616,7 @@ public sealed class Ultimate : IPrediction
             CastPosition: interceptResult.CastPosition,
             PredictedTargetPosition: interceptResult.PredictedTargetPosition,
             InterceptTime: interceptResult.DetonationTime,
-            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
     }
 
     /// <summary>
@@ -681,27 +630,31 @@ public sealed class Ultimate : IPrediction
         double castDelay,
         double effectiveRadius)
     {
-        // Base margin for numerical stability
-        const double baseMargin = 0.1;
-
+        // For very small effective radii, scale proportionally
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
 
-        // How far can target travel during delay?
-        double travelDuringDelay = targetSpeed * castDelay;
+        // Core unit of uncertainty: how far target moves in one server tick
+        double tickMovement = Constants.GetTickMovement(targetSpeed);
+        
+        // How many ticks elapse during the cast delay?
+        double ticksOfDelay = castDelay * Constants.ServerTickRate;
+        
+        // === Delay-based uncertainty ===
+        // Each tick of delay adds half tick movement uncertainty
+        double delayUncertainty = ticksOfDelay * tickMovement * 0.5;
+        
+        // === Base speed uncertainty ===
+        // Even with zero delay, fast targets have inherent uncertainty
+        double speedUncertainty = tickMovement;
+        
+        // Combine uncertainties using RMS
+        double totalUncertainty = Math.Sqrt(
+            speedUncertainty * speedUncertainty +
+            delayUncertainty * delayUncertainty);
 
-        // If target can travel more than half the effective radius,
-        // increase margin proportionally
-        double travelRatio = travelDuringDelay / effectiveRadius;
-        double travelUncertainty = Math.Min(travelRatio * 2.0, 5.0);
-
-        double margin = baseMargin + travelUncertainty;
-
-        // Clamp to reasonable bounds
-        double minMargin = effectiveRadius * Constants.MinAdaptiveMarginFraction;
-        double maxMargin = effectiveRadius * Constants.MaxAdaptiveMarginFraction;
-
-        return Math.Clamp(margin, minMargin, maxMargin);
+        // Clamp: min = epsilon, max = half of effective radius
+        return Math.Clamp(totalUncertainty, Constants.Epsilon, effectiveRadius * 0.5);
     }
 
     /// <summary>
