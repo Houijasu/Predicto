@@ -22,4 +22,14 @@ public readonly record struct LinearSkillshot(
         double range,
         double width = 70.0,
         double delay = 0.25) => new(speed, range, width, delay);
+
+    /// <summary>
+    /// Blitzcrank Q - Rocket Grab
+    /// Speed: 1800
+    /// Range: 1150
+    /// Width: 70
+    /// Delay: 0.25s (cast time)
+    /// Note: Stuns for 0.65s and pulls target to 75 units in front of Blitzcrank.
+    /// </summary>
+    public static LinearSkillshot BlitzcrankQ => new(Speed: 1800, Range: 1150, Width: 70, Delay: 0.25);
 }

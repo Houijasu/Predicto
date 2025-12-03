@@ -126,10 +126,11 @@ public sealed class Ultimate : IPrediction
         var interceptResult = result.Value;
 
         // === Range Validation ===
+        // Use epsilon tolerance to prevent false out-of-range due to floating-point precision
         double flightTime = Math.Max(0, interceptResult.InterceptTime - input.Skillshot.Delay);
         double travelDistance = input.Skillshot.Speed * flightTime;
 
-        if (travelDistance > input.Skillshot.Range)
+        if (travelDistance > input.Skillshot.Range + Constants.RangeTolerance)
         {
             return new PredictionResult.OutOfRange(travelDistance, input.Skillshot.Range);
         }
@@ -153,6 +154,19 @@ public sealed class Ultimate : IPrediction
             int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
             double waypointPenalty = Math.Pow(0.9, waypointDelta); // 10% reduction per waypoint
             confidence *= waypointPenalty;
+        }
+
+        // === Confidence Penalty for Segment Distance ===
+        // Even on the current segment, predictions far along the path are less reliable
+        // Calculate how far along the path the intercept occurs
+        double remainingPathTime = path.GetRemainingPathTime();
+        if (remainingPathTime > Constants.Epsilon)
+        {
+            double segmentProgress = interceptResult.InterceptTime / remainingPathTime;
+            // Apply mild penalty for predictions deep into the path (exponential decay)
+            // At 100% path progress: 0.85x confidence, at 50%: ~0.92x
+            double segmentPenalty = Math.Exp(-0.16 * segmentProgress);
+            confidence *= segmentPenalty;
         }
 
         return new PredictionResult.Hit(
@@ -276,10 +290,11 @@ public sealed class Ultimate : IPrediction
         var (aimPoint, predictedTargetPos, interceptTime) = result.Value;
 
         // === Range Validation ===
+        // Use epsilon tolerance to prevent false out-of-range due to floating-point precision
         double flightTime = Math.Max(0, interceptTime - input.Skillshot.Delay);
         double travelDistance = input.Skillshot.Speed * flightTime;
 
-        if (travelDistance > input.Skillshot.Range)
+        if (travelDistance > input.Skillshot.Range + Constants.RangeTolerance)
         {
             return new PredictionResult.OutOfRange(travelDistance, input.Skillshot.Range);
         }
@@ -332,9 +347,19 @@ public sealed class Ultimate : IPrediction
     }
 
     /// <summary>
-    /// Calculates the minimum margin for maximum aggressiveness.
-    /// Uses only a tiny epsilon margin for numerical stability.
-    /// LoL uses swept collision detection, so we don't need tick-based margins.
+    /// Calculates adaptive margin based on prediction uncertainty factors.
+    /// 
+    /// The margin determines how far "inside" the collision zone we aim.
+    /// Larger margins = more reliable hits but less optimal positioning.
+    /// Smaller margins = more aggressive but risk missing due to:
+    ///   - Target velocity prediction errors
+    ///   - Network latency variations
+    ///   - Floating-point precision accumulation
+    /// 
+    /// Factors considered:
+    /// - Target speed: Faster targets have more prediction uncertainty
+    /// - Distance: Farther targets accumulate more positional error over flight time
+    /// - Speed ratio: When target speed approaches skillshot speed, small errors amplify
     /// </summary>
     private static double CalculateAdaptiveMargin(
         double targetSpeed,
@@ -343,16 +368,49 @@ public sealed class Ultimate : IPrediction
         double skillshotWidth,
         double effectiveRadius)
     {
-        // Maximum aggressiveness: aim as close to the trailing edge as possible
-        // LoL uses swept collision detection between ticks, so even edge hits register
-        // Use minimal margin (0.1 pixels) just for numerical stability
+        // Base margin: minimum for numerical stability
+        const double baseMargin = 0.1;
         
         // For very small effective radii, scale proportionally
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
         
-        // Minimum practical margin - essentially aiming at the exact edge
-        return 0.1;
+        // === Speed-based uncertainty ===
+        // Faster targets have more prediction uncertainty
+        // Scale: 0 at rest, up to ~2 pixels at max reasonable velocity
+        double speedUncertainty = targetSpeed / Constants.MaxReasonableVelocity * 2.0;
+        
+        // === Distance-based uncertainty ===
+        // Longer flight times accumulate more error
+        // Estimate flight time and scale uncertainty
+        double estimatedFlightTime = distance / skillshotSpeed;
+        double distanceUncertainty = estimatedFlightTime * 0.5; // ~0.5 pixels per second of flight
+        
+        // === Speed ratio factor ===
+        // When target speed approaches skillshot speed, prediction becomes unstable
+        // (the quadratic discriminant approaches zero, amplifying numerical errors)
+        double speedRatio = targetSpeed / (skillshotSpeed + Constants.Epsilon);
+        double ratioUncertainty = 0.0;
+        if (speedRatio > 0.7)
+        {
+            // Exponential increase as we approach equal speeds
+            ratioUncertainty = Math.Pow((speedRatio - 0.7) / 0.3, 2) * 3.0;
+        }
+        
+        // Combine uncertainties (not additive - use RMS-like combination)
+        double totalUncertainty = Math.Sqrt(
+            speedUncertainty * speedUncertainty + 
+            distanceUncertainty * distanceUncertainty + 
+            ratioUncertainty * ratioUncertainty);
+        
+        // Calculate final margin
+        double margin = baseMargin + totalUncertainty;
+        
+        // Clamp to reasonable bounds
+        double minMargin = effectiveRadius * Constants.MinAdaptiveMarginFraction;
+        double maxMargin = effectiveRadius * Constants.MaxAdaptiveMarginFraction;
+        
+        return Math.Clamp(margin, minMargin, maxMargin);
     }
 
     /// <summary>
@@ -458,4 +516,215 @@ public sealed class Ultimate : IPrediction
             InterceptTime: totalTime,
             Confidence: 1.0);
     }
+
+    #region Circular Skillshot Prediction
+
+    /// <inheritdoc />
+    public PredictionResult PredictCircular(CircularPredictionInput input)
+    {
+        // === Input Validation ===
+        if (input.Skillshot.Radius <= Constants.Epsilon)
+            return new PredictionResult.Unreachable("Skillshot radius must be positive");
+
+        if (input.Skillshot.Range <= Constants.Epsilon)
+            return new PredictionResult.Unreachable("Skillshot range must be positive");
+
+        if (input.Skillshot.Delay < 0)
+            return new PredictionResult.Unreachable("Skillshot delay cannot be negative");
+
+        // === Use Path-Based Prediction if Available ===
+        if (input.HasPath)
+        {
+            return PredictCircularWithPath(input);
+        }
+
+        // === Velocity-Based Prediction ===
+        return PredictCircularWithVelocity(input);
+    }
+
+    /// <summary>
+    /// Circular prediction with path-based target movement.
+    /// </summary>
+    private PredictionResult PredictCircularWithPath(CircularPredictionInput input)
+    {
+        var path = input.TargetPath!;
+
+        // === Velocity Sanity Checks ===
+        if (path.Speed > Constants.MaxReasonableVelocity)
+            return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
+
+        double effectiveRadius = input.Skillshot.Radius + input.TargetHitboxRadius;
+
+        // === Use Behind-Target Strategy ===
+        var result = InterceptSolver.SolveCircularPathBehindTarget(
+            input.CasterPosition,
+            path,
+            input.Skillshot.Radius,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Range,
+            behindMargin: CalculateCircularAdaptiveMargin(path.Speed, input.Skillshot.Delay, effectiveRadius));
+
+        if (!result.HasValue)
+        {
+            return new PredictionResult.OutOfRange(
+                (path.GetPositionAtTime(input.Skillshot.Delay) - input.CasterPosition).Length,
+                input.Skillshot.Range);
+        }
+
+        var interceptResult = result.Value;
+
+        // === Calculate Confidence ===
+        double confidence = InterceptSolver.CalculateCircularConfidence(
+            input.Skillshot.Delay,
+            path.Speed,
+            input.Skillshot.Radius,
+            input.TargetHitboxRadius);
+
+        // Apply path uncertainty penalty
+        double remainingPathTime = path.GetRemainingPathTime();
+        if (remainingPathTime > Constants.Epsilon && input.Skillshot.Delay > 0)
+        {
+            double pathProgress = input.Skillshot.Delay / remainingPathTime;
+            double pathPenalty = Math.Exp(-0.2 * pathProgress);
+            confidence *= pathPenalty;
+        }
+
+        return new PredictionResult.Hit(
+            CastPosition: interceptResult.CastPosition,
+            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
+            InterceptTime: interceptResult.DetonationTime,
+            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+    }
+
+    /// <summary>
+    /// Circular prediction with velocity-based target movement.
+    /// </summary>
+    private PredictionResult PredictCircularWithVelocity(CircularPredictionInput input)
+    {
+        // === Velocity Sanity Checks ===
+        double targetSpeed = input.TargetVelocity.Length;
+        if (targetSpeed > Constants.MaxReasonableVelocity)
+            return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
+
+        // === Geometry Setup ===
+        var displacement = input.TargetPosition - input.CasterPosition;
+        double distance = displacement.Length;
+        double effectiveRadius = input.Skillshot.Radius + input.TargetHitboxRadius;
+
+        // === Stationary Target ===
+        if (targetSpeed < Constants.MinVelocity)
+        {
+            return PredictCircularStationary(input, distance, effectiveRadius);
+        }
+
+        // === Calculate Adaptive Margin ===
+        double adaptiveMargin = CalculateCircularAdaptiveMargin(targetSpeed, input.Skillshot.Delay, effectiveRadius);
+
+        // === Solve Behind-Target Circular Intercept ===
+        var result = InterceptSolver.SolveCircularBehindTarget(
+            input.CasterPosition,
+            input.TargetPosition,
+            input.TargetVelocity,
+            input.Skillshot.Radius,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Range,
+            behindMargin: adaptiveMargin);
+
+        if (!result.HasValue)
+        {
+            // Calculate where target will be for error reporting
+            Point2D predictedPos = input.TargetPosition + input.TargetVelocity * input.Skillshot.Delay;
+            double predictedDistance = (predictedPos - input.CasterPosition).Length;
+            return new PredictionResult.OutOfRange(predictedDistance, input.Skillshot.Range);
+        }
+
+        var interceptResult = result.Value;
+
+        // === Calculate Confidence ===
+        double confidence = InterceptSolver.CalculateCircularConfidence(
+            input.Skillshot.Delay,
+            targetSpeed,
+            input.Skillshot.Radius,
+            input.TargetHitboxRadius);
+
+        // === Apply Movement Direction Factor ===
+        // Perpendicular movement is harder to predict for circular spells
+        if (targetSpeed > Constants.MinVelocity && displacement.Length > Constants.Epsilon)
+        {
+            double dotProduct = displacement.DotProduct(input.TargetVelocity);
+            double cosAngle = dotProduct / (displacement.Length * targetSpeed);
+            cosAngle = Math.Clamp(cosAngle, -1.0, 1.0);
+            
+            // Targets moving toward/away from caster are easier to predict
+            // Targets moving perpendicular are harder
+            double angleFactor = 0.7 + 0.3 * Math.Abs(cosAngle);
+            confidence *= angleFactor;
+        }
+
+        return new PredictionResult.Hit(
+            CastPosition: interceptResult.CastPosition,
+            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
+            InterceptTime: interceptResult.DetonationTime,
+            Confidence: Math.Clamp(confidence, 0.1, 1.0));
+    }
+
+    /// <summary>
+    /// Calculates adaptive margin for circular skillshots.
+    /// Circular spells have different considerations than linear ones:
+    /// - Only delay matters (no flight time)
+    /// - Larger effective radius typically
+    /// </summary>
+    private static double CalculateCircularAdaptiveMargin(
+        double targetSpeed,
+        double castDelay,
+        double effectiveRadius)
+    {
+        // Base margin for numerical stability
+        const double baseMargin = 0.1;
+
+        if (effectiveRadius < 1.0)
+            return effectiveRadius * 0.5;
+
+        // How far can target travel during delay?
+        double travelDuringDelay = targetSpeed * castDelay;
+
+        // If target can travel more than half the effective radius,
+        // increase margin proportionally
+        double travelRatio = travelDuringDelay / effectiveRadius;
+        double travelUncertainty = Math.Min(travelRatio * 2.0, 5.0);
+
+        double margin = baseMargin + travelUncertainty;
+
+        // Clamp to reasonable bounds
+        double minMargin = effectiveRadius * Constants.MinAdaptiveMarginFraction;
+        double maxMargin = effectiveRadius * Constants.MaxAdaptiveMarginFraction;
+
+        return Math.Clamp(margin, minMargin, maxMargin);
+    }
+
+    /// <summary>
+    /// Circular prediction for stationary targets.
+    /// </summary>
+    private static PredictionResult PredictCircularStationary(
+        CircularPredictionInput input,
+        double distance,
+        double effectiveRadius)
+    {
+        // Check if predicted position is within range
+        if (distance > input.Skillshot.Range + Constants.RangeTolerance)
+        {
+            return new PredictionResult.OutOfRange(distance, input.Skillshot.Range);
+        }
+
+        // For stationary target, aim directly at current position
+        return new PredictionResult.Hit(
+            CastPosition: input.TargetPosition,
+            PredictedTargetPosition: input.TargetPosition,
+            InterceptTime: input.Skillshot.Delay,
+            Confidence: 1.0);
+    }
+
+    #endregion
 }

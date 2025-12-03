@@ -95,4 +95,12 @@ public static class Constants
     /// 2% gives ~1.5 pixels margin at typical speeds - aggressive but safe for 30Hz.
     /// </summary>
     public const double TickMarginSafetyFactor = 0.02;
+
+    /// <summary>
+    /// Tolerance for range comparisons to account for floating-point precision.
+    /// Even with triple refinement (~1e-15), accumulated errors in position
+    /// calculations can cause false out-of-range results at exact boundaries.
+    /// 0.01 units is imperceptible in-game but prevents edge case failures.
+    /// </summary>
+    public const double RangeTolerance = 0.01;
 }

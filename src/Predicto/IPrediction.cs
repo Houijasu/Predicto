@@ -14,4 +14,12 @@ public interface IPrediction
     /// <param name="input">Input parameters containing caster position, target state, and skillshot data</param>
     /// <returns>Prediction result indicating success (Hit), out of range, or unreachable</returns>
     PredictionResult Predict(PredictionInput input);
+
+    /// <summary>
+    /// Predicts the optimal cast position for a circular (ground-targeted) skillshot.
+    /// These spells detonate instantly at a location after a delay.
+    /// </summary>
+    /// <param name="input">Input parameters containing caster position, target state, and skillshot data</param>
+    /// <returns>Prediction result indicating success (Hit), out of range, or unreachable</returns>
+    PredictionResult PredictCircular(CircularPredictionInput input);
 }

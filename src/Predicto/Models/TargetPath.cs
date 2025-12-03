@@ -154,6 +154,50 @@ public sealed class TargetPath
     }
 
     /// <summary>
+    /// Gets the velocity vector at a given time in the future.
+    /// Returns the direction toward the waypoint the target will be heading to at that time.
+    /// Returns zero vector if the target has reached the final waypoint.
+    /// </summary>
+    /// <param name="time">Time in seconds from now</param>
+    /// <returns>Velocity vector at the given future time</returns>
+    public Vector2D GetVelocityAtTime(double time)
+    {
+        if (time <= 0 || Speed < Constants.Epsilon)
+            return GetCurrentVelocity();
+
+        // Find position and determine which segment we're on at that time
+        double remainingDistance = Speed * time;
+        var position = CurrentPosition;
+        int waypointIndex = CurrentWaypointIndex;
+
+        while (remainingDistance > 0 && waypointIndex < Waypoints.Count)
+        {
+            var target = Waypoints[waypointIndex];
+            var toTarget = target - position;
+            var distanceToTarget = toTarget.Length;
+
+            if (distanceToTarget <= remainingDistance)
+            {
+                // Reach this waypoint and continue to next
+                position = target;
+                remainingDistance -= distanceToTarget;
+                waypointIndex++;
+            }
+            else
+            {
+                // We're partway on this segment at time t
+                // Return velocity toward current target waypoint
+                if (distanceToTarget < Constants.Epsilon)
+                    return new Vector2D(0, 0);
+                return toTarget.Normalize() * Speed;
+            }
+        }
+
+        // Reached or passed final waypoint - target is stationary
+        return new Vector2D(0, 0);
+    }
+
+    /// <summary>
     /// Enumerates all path segments as (start, end, segmentIndex) tuples.
     /// First segment starts from CurrentPosition.
     /// </summary>

@@ -10,22 +10,10 @@ const int ScreenHeight = 1000;
 Raylib.InitWindow(ScreenWidth, ScreenHeight, "Predicto - Ultimate Behind-Edge Prediction");
 Raylib.SetTargetFPS(60);
 
-// Load Arial font (fallback to default if not found)
-Font arialFont;
-try
-{
-    arialFont = Raylib.LoadFontEx("/usr/share/fonts/TTF/Arial.TTF", 32, null, 0);
-    if (arialFont.BaseSize == 0)
-        arialFont = Raylib.LoadFontEx("/usr/share/fonts/truetype/msttcorefonts/Arial.ttf", 32, null, 0);
-    if (arialFont.BaseSize == 0)
-        arialFont = Raylib.LoadFontEx("/usr/share/fonts/TTF/DejaVuSans.ttf", 32, null, 0);
-}
-catch
-{
-    arialFont = Raylib.GetFontDefault();
-}
-if (arialFont.BaseSize == 0)
-    arialFont = Raylib.GetFontDefault();
+// Load Liberation Sans font (clean, readable)
+var font = Raylib.LoadFontEx("/usr/share/fonts/liberation/LiberationSans-Regular.ttf", 24, null, 0);
+if (font.BaseSize == 0)
+    font = Raylib.GetFontDefault();
 
 var ultimate = new Ultimate();
 
@@ -49,11 +37,12 @@ var casterPos = new Vector2(300, 400);
 var targetPos = new Vector2(800, 400);
 var targetVelocity = new Vector2(0, -1);
 float targetSpeed = 350f;
-// Nidalee Q defaults
+// Skillshot parameters (defaults will be overwritten by preset)
 float skillshotSpeed = 2000f;
 float skillshotRange = 2000f;
 float skillshotWidth = 40f;
 float skillshotDelay = 0.25f;
+float skillshotRadius = 200f;  // For circular spells
 float targetHitbox = 65f;
 
 // Animation state
@@ -69,6 +58,11 @@ string hitResult = "";
 float hitResultTimer = 0f;
 int hitCount = 0;
 int missCount = 0;
+
+// Circular spell animation state
+bool isCircularFiring = false;  // Whether current shot is circular
+float circularAnimRadius = 0f;  // Current expanding radius during animation
+float circularTargetRadius = 0f;  // Target radius for the spell
 
 // Trail effect
 List<Vector2> skillshotTrail = new();
@@ -105,8 +99,8 @@ Vector2 shotPrevWaypoint = Vector2.Zero;    // Previous waypoint (or start pos)
 Vector2 shotNextWaypoint = Vector2.Zero;    // Next waypoint target is heading toward
 int shotCurrentWaypointIndex = -1;          // Which waypoint we're heading toward
 
-// Presets
-var presets = new (string Name, Vector2 Vel, float Speed, float Range, float Width, float Delay)[]
+// Presets - Linear skillshots
+var linearPresets = new (string Name, Vector2 Vel, float Speed, float Range, float Width, float Delay)[]
 {
     ("Ezreal Q", new Vector2(0, -1), 2000, 1150, 60, 0.25f),
     ("Morgana Q", new Vector2(0, -1), 1200, 1175, 70, 0.25f),
@@ -117,7 +111,21 @@ var presets = new (string Name, Vector2 Vel, float Speed, float Range, float Wid
     ("Jinx W", new Vector2(0, -1), 3300, 1450, 60, 0.6f),
     ("Ashe R", new Vector2(0, -1), 1600, 2000, 130, 0.25f),
 };
-int currentPreset = 3; // Start with Nidalee Q
+
+// Presets - Circular skillshots (ground-targeted, instant)
+var circularPresets = new (string Name, float Radius, float Range, float Delay)[]
+{
+    ("Xerath W", 200, 1100, 0.5f),
+    ("Xerath W Center", 50, 1100, 0.5f),
+    ("Veigar W", 112, 950, 1.2f),
+    ("Cho'Gath Q", 175, 950, 0.5f),
+    ("Ziggs W", 150, 1000, 0.25f),
+    ("Ziggs E", 250, 900, 0.25f),
+};
+
+int currentLinearPreset = 3; // Start with Nidalee Q
+int currentCircularPreset = 0; // Start with Xerath W
+bool isCircularMode = true; // Start with Xerath W (circular mode)
 
 while (!Raylib.WindowShouldClose())
 {
@@ -181,85 +189,160 @@ while (!Raylib.WindowShouldClose())
     // Input handling
     Vector2 mouseWorld = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), camera);
     HandleInput(ref casterPos, ref targetPos, ref targetVelocity, ref targetSpeed,
-                ref skillshotSpeed, ref skillshotRange, ref skillshotWidth, ref skillshotDelay,
-                presets, ref currentPreset, isFiring, mouseWorld, waypoints, ref pathModeActive,
+                ref skillshotSpeed, ref skillshotRange, ref skillshotWidth, ref skillshotDelay, ref skillshotRadius,
+                linearPresets, circularPresets, ref currentLinearPreset, ref currentCircularPreset, ref isCircularMode,
+                isFiring, mouseWorld, waypoints, ref pathModeActive,
                 ref pathStartPos, ref pathElapsedTime);
 
     // Target stays stationary while drawing path - only moves when firing
 
-    // Run prediction
-    PredictionInput input;
-    if (pathModeActive && waypoints.Count > 0)
+    // Run prediction - use appropriate type based on mode
+    if (isCircularMode)
     {
-        // Build the path from the original start position
-        var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
-        var fullPath = new TargetPath(
-            waypointsList,
-            new Point2D(pathStartPos.X, pathStartPos.Y),
-            0,
-            targetSpeed);
+        // Circular prediction
+        CircularPredictionInput circularInput;
+        var circularSkillshot = new CircularSkillshot(skillshotRadius, skillshotRange, skillshotDelay);
         
-        // Find which segment the target is currently on
-        double remainingDistance = targetSpeed * pathElapsedTime;
-        var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-        int currentWaypointIndex = 0;
-        
-        while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+        if (pathModeActive && waypoints.Count > 0)
         {
-            var target = waypointsList[currentWaypointIndex];
-            var distanceToTarget = (target - position).Length;
-            
-            if (distanceToTarget <= remainingDistance)
-            {
-                position = target;
-                remainingDistance -= distanceToTarget;
-                currentWaypointIndex++;
-            }
-            else
-            {
-                break;
-            }
-        }
-        
-        // If we've passed all waypoints, target is stationary at last waypoint
-        if (currentWaypointIndex >= waypointsList.Count)
-        {
-            // Target stopped at last waypoint - use zero velocity (stationary target)
-            input = new PredictionInput(
-                new Point2D(casterPos.X, casterPos.Y),
-                new Point2D(targetPos.X, targetPos.Y),
-                new Vector2D(0, 0),  // Stationary
-                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
-                targetHitbox);
-        }
-        else
-        {
-            // Still on path - create path from current position with remaining waypoints
-            var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
-            var path = new TargetPath(
-                remainingWaypoints,
-                new Point2D(targetPos.X, targetPos.Y),
+            var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+            var fullPath = new TargetPath(
+                waypointsList,
+                new Point2D(pathStartPos.X, pathStartPos.Y),
                 0,
                 targetSpeed);
             
-            input = PredictionInput.WithPath(
+            // Find which segment the target is currently on
+            double remainingDistance = targetSpeed * pathElapsedTime;
+            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+            int currentWaypointIndex = 0;
+            
+            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+            {
+                var target = waypointsList[currentWaypointIndex];
+                var distanceToTarget = (target - position).Length;
+                
+                if (distanceToTarget <= remainingDistance)
+                {
+                    position = target;
+                    remainingDistance -= distanceToTarget;
+                    currentWaypointIndex++;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            if (currentWaypointIndex >= waypointsList.Count)
+            {
+                // Stationary at last waypoint
+                circularInput = new CircularPredictionInput(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    new Point2D(targetPos.X, targetPos.Y),
+                    new Vector2D(0, 0),
+                    circularSkillshot,
+                    targetHitbox);
+            }
+            else
+            {
+                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+                var path = new TargetPath(
+                    remainingWaypoints,
+                    new Point2D(targetPos.X, targetPos.Y),
+                    0,
+                    targetSpeed);
+                
+                circularInput = CircularPredictionInput.WithPath(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    path,
+                    circularSkillshot,
+                    targetHitbox);
+            }
+        }
+        else
+        {
+            circularInput = new CircularPredictionInput(
                 new Point2D(casterPos.X, casterPos.Y),
-                path,
-                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                new Point2D(targetPos.X, targetPos.Y),
+                new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+                circularSkillshot,
                 targetHitbox);
         }
+        
+        ultimateResult = ultimate.PredictCircular(circularInput);
     }
     else
     {
-        input = new PredictionInput(
-            new Point2D(casterPos.X, casterPos.Y),
-            new Point2D(targetPos.X, targetPos.Y),
-            new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
-            new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
-            targetHitbox);
+        // Linear prediction
+        PredictionInput input;
+        if (pathModeActive && waypoints.Count > 0)
+        {
+            var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+            var fullPath = new TargetPath(
+                waypointsList,
+                new Point2D(pathStartPos.X, pathStartPos.Y),
+                0,
+                targetSpeed);
+            
+            double remainingDistance = targetSpeed * pathElapsedTime;
+            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+            int currentWaypointIndex = 0;
+            
+            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+            {
+                var target = waypointsList[currentWaypointIndex];
+                var distanceToTarget = (target - position).Length;
+                
+                if (distanceToTarget <= remainingDistance)
+                {
+                    position = target;
+                    remainingDistance -= distanceToTarget;
+                    currentWaypointIndex++;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            if (currentWaypointIndex >= waypointsList.Count)
+            {
+                input = new PredictionInput(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    new Point2D(targetPos.X, targetPos.Y),
+                    new Vector2D(0, 0),
+                    new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                    targetHitbox);
+            }
+            else
+            {
+                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+                var path = new TargetPath(
+                    remainingWaypoints,
+                    new Point2D(targetPos.X, targetPos.Y),
+                    0,
+                    targetSpeed);
+                
+                input = PredictionInput.WithPath(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    path,
+                    new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                    targetHitbox);
+            }
+        }
+        else
+        {
+            input = new PredictionInput(
+                new Point2D(casterPos.X, casterPos.Y),
+                new Point2D(targetPos.X, targetPos.Y),
+                new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                targetHitbox);
+        }
+        
+        ultimateResult = ultimate.Predict(input);
     }
-
-    ultimateResult = ultimate.Predict(input);
 
     // Stop continuous firing with Escape
     if (Raylib.IsKeyPressed(KeyboardKey.Escape) && continuousFiring)
@@ -281,81 +364,131 @@ while (!Raylib.WindowShouldClose())
     // Helper to start a new shot
     void StartNewShot()
     {
-        // Re-run prediction from current state
-        PredictionInput shotInput;
-        if (continuousFiring && waypoints.Count > 0)
+        PredictionResult? shotResult;
+        
+        // Store whether this shot is circular
+        isCircularFiring = isCircularMode;
+        
+        if (isCircularMode)
         {
-            // Build path from current path position
-            var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
-            var fullPath = new TargetPath(
-                waypointsList,
-                new Point2D(pathStartPos.X, pathStartPos.Y),
-                0,
-                targetSpeed);
+            // Circular prediction
+            CircularPredictionInput shotInput;
+            var circularSkillshot = new CircularSkillshot(skillshotRadius, skillshotRange, skillshotDelay);
             
-            // Get current position on path
-            var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
-            
-            // Find remaining waypoints
-            double remainingDistance = targetSpeed * pathTotalTime;
-            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-            int currentWaypointIndex = 0;
-            
-            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+            if (continuousFiring && waypoints.Count > 0)
             {
-                var target = waypointsList[currentWaypointIndex];
-                var distanceToTarget = (target - position).Length;
+                var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+                var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
+                var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
                 
-                if (distanceToTarget <= remainingDistance)
+                double remainingDistance = targetSpeed * pathTotalTime;
+                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+                int currentWaypointIndex = 0;
+                
+                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
                 {
-                    position = target;
-                    remainingDistance -= distanceToTarget;
-                    currentWaypointIndex++;
+                    var target = waypointsList[currentWaypointIndex];
+                    var distanceToTarget = (target - position).Length;
+                    if (distanceToTarget <= remainingDistance)
+                    {
+                        position = target;
+                        remainingDistance -= distanceToTarget;
+                        currentWaypointIndex++;
+                    }
+                    else break;
                 }
-                else
+                
+                if (currentWaypointIndex >= waypointsList.Count)
                 {
-                    break;
+                    continuousFiring = false;
+                    isFiring = false;
+                    return;
                 }
+                
+                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+                var pathForPrediction = new TargetPath(remainingWaypoints, currentPathPos, 0, targetSpeed);
+                
+                shotInput = CircularPredictionInput.WithPath(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    pathForPrediction,
+                    circularSkillshot,
+                    targetHitbox);
+                
+                activePath = fullPath;
             }
-            
-            // Check if path is complete
-            if (currentWaypointIndex >= waypointsList.Count)
+            else
             {
-                // Path complete - stop continuous firing
-                continuousFiring = false;
-                isFiring = false;
-                return;
+                shotInput = new CircularPredictionInput(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    new Point2D(targetPos.X, targetPos.Y),
+                    new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+                    circularSkillshot,
+                    targetHitbox);
+                activePath = null;
             }
             
-            // Create path from current position with remaining waypoints
-            var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
-            var pathForPrediction = new TargetPath(
-                remainingWaypoints,
-                currentPathPos,
-                0,
-                targetSpeed);
-            
-            shotInput = PredictionInput.WithPath(
-                new Point2D(casterPos.X, casterPos.Y),
-                pathForPrediction,
-                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
-                targetHitbox);
-            
-            // Store full path for animation (from original start)
-            activePath = fullPath;
+            shotResult = ultimate.PredictCircular(shotInput);
+            circularTargetRadius = skillshotRadius;
         }
         else
         {
-            shotInput = new PredictionInput(
-                new Point2D(casterPos.X, casterPos.Y),
-                new Point2D(targetPos.X, targetPos.Y),
-                new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
-                new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
-                targetHitbox);
-            activePath = null;
+            // Linear prediction
+            PredictionInput shotInput;
+            
+            if (continuousFiring && waypoints.Count > 0)
+            {
+                var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
+                var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
+                var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
+                
+                double remainingDistance = targetSpeed * pathTotalTime;
+                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
+                int currentWaypointIndex = 0;
+                
+                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
+                {
+                    var target = waypointsList[currentWaypointIndex];
+                    var distanceToTarget = (target - position).Length;
+                    if (distanceToTarget <= remainingDistance)
+                    {
+                        position = target;
+                        remainingDistance -= distanceToTarget;
+                        currentWaypointIndex++;
+                    }
+                    else break;
+                }
+                
+                if (currentWaypointIndex >= waypointsList.Count)
+                {
+                    continuousFiring = false;
+                    isFiring = false;
+                    return;
+                }
+                
+                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
+                var pathForPrediction = new TargetPath(remainingWaypoints, currentPathPos, 0, targetSpeed);
+                
+                shotInput = PredictionInput.WithPath(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    pathForPrediction,
+                    new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                    targetHitbox);
+                
+                activePath = fullPath;
+            }
+            else
+            {
+                shotInput = new PredictionInput(
+                    new Point2D(casterPos.X, casterPos.Y),
+                    new Point2D(targetPos.X, targetPos.Y),
+                    new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed),
+                    new LinearSkillshot(skillshotSpeed, skillshotRange, skillshotWidth, skillshotDelay),
+                    targetHitbox);
+                activePath = null;
+            }
+            
+            shotResult = ultimate.Predict(shotInput);
         }
-        
-        var shotResult = ultimate.Predict(shotInput);
         
         if (shotResult is PredictionResult.Hit hit)
         {
@@ -363,15 +496,13 @@ while (!Raylib.WindowShouldClose())
             float aimToTargetDist = Vector2.Distance(
                 new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y),
                 new Vector2((float)hit.PredictedTargetPosition.X, (float)hit.PredictedTargetPosition.Y));
-            float effectiveRadius = targetHitbox + skillshotWidth / 2;
-            float trailingEdgeDist = effectiveRadius - aimToTargetDist;  // How far inside the hitbox we're aiming
+            float effectiveRadius = isCircularFiring 
+                ? (float)(targetHitbox + skillshotRadius)
+                : targetHitbox + skillshotWidth / 2;
+            float trailingEdgeDist = effectiveRadius - aimToTargetDist;
             float casterToAimDist = Vector2.Distance(casterPos, new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y));
             
-            Console.WriteLine($"\n=== SHOT #{hitCount + missCount + 1} ===");
-            Console.WriteLine($"Trailing edge distance: {trailingEdgeDist:F1} px (aim {aimToTargetDist:F1} from center, effective radius {effectiveRadius:F1})");
-            Console.WriteLine($"Intercept: {hit.InterceptTime:F4}s | Aim dist: {casterToAimDist:F1} | Range: {skillshotRange:F1}");
-            
-            // Store debug info for potential miss logging
+            // Store debug info
             currentShotNumber = hitCount + missCount + 1;
             shotPathTotalTime = pathTotalTime;
             shotCasterPos = casterPos;
@@ -390,7 +521,6 @@ while (!Raylib.WindowShouldClose())
                 var currentPos = fullPath.GetPositionAtTime(pathTotalTime);
                 shotCurrentPathPos = new Vector2((float)currentPos.X, (float)currentPos.Y);
                 
-                // Find current segment
                 double remainingDist = targetSpeed * pathTotalTime;
                 var pos = new Point2D(pathStartPos.X, pathStartPos.Y);
                 int wpIdx = 0;
@@ -398,12 +528,7 @@ while (!Raylib.WindowShouldClose())
                 {
                     var tgt = waypointsList[wpIdx];
                     var dist = (tgt - pos).Length;
-                    if (dist <= remainingDist)
-                    {
-                        pos = tgt;
-                        remainingDist -= dist;
-                        wpIdx++;
-                    }
+                    if (dist <= remainingDist) { pos = tgt; remainingDist -= dist; wpIdx++; }
                     else break;
                 }
                 shotCurrentWaypointIndex = wpIdx;
@@ -426,57 +551,13 @@ while (!Raylib.WindowShouldClose())
             skillshotDir = Vector2.Normalize(fireAimPos - casterPos);
             skillshotPos = casterPos;
             skillshotTrail.Clear();
+            circularAnimRadius = 0f;
             hitResult = "";
             collisionDisplayTimer = 0f;
         }
         else
         {
             // Can't hit - stop continuous firing
-            Console.WriteLine($"\n=== PREDICTION FAILED - Stopping continuous fire ===");
-            Console.WriteLine($"pathTotalTime: {pathTotalTime:F4}s");
-            Console.WriteLine($"pathStartPos: ({pathStartPos.X:F1}, {pathStartPos.Y:F1})");
-            Console.WriteLine($"Caster: ({casterPos.X:F1}, {casterPos.Y:F1})");
-            if (shotResult is PredictionResult.OutOfRange oor)
-            {
-                Console.WriteLine($"Result: OutOfRange - Distance: {oor.Distance:F1}, MaxRange: {oor.MaxRange:F1}");
-            }
-            else if (shotResult is PredictionResult.Unreachable)
-            {
-                Console.WriteLine($"Result: Unreachable");
-            }
-            else
-            {
-                Console.WriteLine($"Result: {shotResult?.GetType().Name ?? "null"}");
-            }
-            if (continuousFiring && waypoints.Count > 0)
-            {
-                var waypointsList = waypoints.Select(wp => new Point2D(wp.X, wp.Y)).ToList();
-                var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
-                var currentPos = fullPath.GetPositionAtTime(pathTotalTime);
-                Console.WriteLine($"Current path pos: ({currentPos.X:F1}, {currentPos.Y:F1})");
-                Console.WriteLine($"Distance from caster to path pos: {Vector2.Distance(casterPos, new Vector2((float)currentPos.X, (float)currentPos.Y)):F1}");
-                
-                // Show remaining waypoints that were passed to prediction
-                double remainingDistance = targetSpeed * pathTotalTime;
-                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-                int currentWaypointIndex = 0;
-                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
-                {
-                    var target = waypointsList[currentWaypointIndex];
-                    var distanceToTarget = (target - position).Length;
-                    if (distanceToTarget <= remainingDistance)
-                    {
-                        position = target;
-                        remainingDistance -= distanceToTarget;
-                        currentWaypointIndex++;
-                    }
-                    else break;
-                }
-                var remainingWaypoints = waypointsList.Skip(currentWaypointIndex).ToList();
-                Console.WriteLine($"currentWaypointIndex: {currentWaypointIndex}");
-                Console.WriteLine($"Remaining waypoints passed to prediction: {string.Join(" -> ", remainingWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
-                Console.WriteLine($"Full waypoints: {string.Join(" -> ", waypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
-            }
             continuousFiring = false;
             isFiring = false;
         }
@@ -491,7 +572,6 @@ while (!Raylib.WindowShouldClose())
         Vector2 animTargetPos;
         if (activePath != null)
         {
-            // In continuous mode, use total path time; otherwise just fireTime
             float pathTime = continuousFiring ? pathTotalTime + fireTime : fireTime;
             var pathPos = activePath.GetPositionAtTime(pathTime);
             animTargetPos = new Vector2((float)pathPos.X, (float)pathPos.Y);
@@ -501,88 +581,124 @@ while (!Raylib.WindowShouldClose())
             animTargetPos = fireTargetStartPos + targetVelocity * targetSpeed * fireTime;
         }
         
-        // Store for drawing
         currentAnimTargetPos = animTargetPos;
 
-        // Launch skillshot after delay
-        if (fireTime >= skillshotDelay && !skillshotLaunched)
+        if (isCircularFiring)
         {
-            skillshotLaunched = true;
-            skillshotPos = casterPos;
-        }
-
-        // Move skillshot
-        if (skillshotLaunched)
-        {
-            skillshotPos += skillshotDir * skillshotSpeed * dt;
-
-            if (skillshotTrail.Count == 0 || Vector2.Distance(skillshotTrail[^1], skillshotPos) > 10)
-                skillshotTrail.Add(skillshotPos);
-            if (skillshotTrail.Count > 30) skillshotTrail.RemoveAt(0);
-
-            float travelDist = Vector2.Distance(casterPos, skillshotPos);
-
-            // Check collision
-            float collisionDist = (skillshotWidth / 2) + targetHitbox;
-            if (Vector2.Distance(skillshotPos, animTargetPos) <= collisionDist)
+            // Circular spell animation - detonates at aim position after delay
+            if (fireTime >= skillshotDelay && !skillshotLaunched)
             {
-                hitResult = "HIT!";
-                hitResultTimer = 1f;
-                hitCount++;
-                targetPos = animTargetPos;
-                collisionPos = (skillshotPos + animTargetPos) / 2;
-                collisionTime = fireTime;
-                collisionDisplayTimer = 2f;
+                skillshotLaunched = true;
+                circularAnimRadius = 0f;
+            }
+            
+            if (skillshotLaunched)
+            {
+                // Expand circle quickly to target radius
+                float expansionSpeed = circularTargetRadius * 4f; // Expand over ~0.25s
+                circularAnimRadius = Math.Min(circularTargetRadius, circularAnimRadius + expansionSpeed * dt);
                 
-                // Update path time and continue if in continuous mode
-                if (continuousFiring)
+                // Check collision - target center within spell radius + hitbox
+                float collisionDist = circularTargetRadius + targetHitbox;
+                float distToAim = Vector2.Distance(animTargetPos, fireAimPos);
+                
+                if (distToAim <= collisionDist)
                 {
-                    pathTotalTime += fireTime;
-                    StartNewShot();
+                    hitResult = "HIT!";
+                    hitResultTimer = 1f;
+                    hitCount++;
+                    targetPos = animTargetPos;
+                    collisionPos = fireAimPos;
+                    collisionTime = fireTime;
+                    collisionDisplayTimer = 2f;
+                    
+                    if (continuousFiring)
+                    {
+                        pathTotalTime += fireTime;
+                        StartNewShot();
+                    }
+                    else
+                    {
+                        isFiring = false;
+                    }
                 }
-                else
+                // Spell completes but missed (after full expansion + small buffer)
+                else if (circularAnimRadius >= circularTargetRadius)
                 {
-                    isFiring = false;
+                    hitResult = "MISS";
+                    hitResultTimer = 1f;
+                    missCount++;
+                    targetPos = animTargetPos;
+                    
+                    if (continuousFiring)
+                    {
+                        pathTotalTime += fireTime;
+                        StartNewShot();
+                    }
+                    else
+                    {
+                        isFiring = false;
+                    }
                 }
             }
-            // Check range (only if no collision)
-            else if (travelDist > skillshotRange)
+        }
+        else
+        {
+            // Linear skillshot animation
+            if (fireTime >= skillshotDelay && !skillshotLaunched)
             {
-                hitResult = "MISS";
-                hitResultTimer = 1f;
-                missCount++;
-                targetPos = animTargetPos;
-                
-                // Log debug info on miss
-                Console.WriteLine($"\n=== MISS - SHOT #{currentShotNumber} ===");
-                Console.WriteLine($"pathTotalTime: {shotPathTotalTime:F4}s");
-                Console.WriteLine($"Caster: ({shotCasterPos.X:F1}, {shotCasterPos.Y:F1})");
-                Console.WriteLine($"Target start (UI): ({shotTargetStartPos.X:F1}, {shotTargetStartPos.Y:F1})");
-                Console.WriteLine($"Current path pos: ({shotCurrentPathPos.X:F1}, {shotCurrentPathPos.Y:F1})");
-                Console.WriteLine($"Prev waypoint: ({shotPrevWaypoint.X:F1}, {shotPrevWaypoint.Y:F1})");
-                Console.WriteLine($"Next waypoint [{shotCurrentWaypointIndex}]: ({shotNextWaypoint.X:F1}, {shotNextWaypoint.Y:F1})");
-                Console.WriteLine($"CastPosition (aim): ({shotAimPos.X:F1}, {shotAimPos.Y:F1})");
-                Console.WriteLine($"PredictedTargetPos: ({shotPredictedTargetPos.X:F1}, {shotPredictedTargetPos.Y:F1})");
-                Console.WriteLine($"InterceptTime: {shotInterceptTime:F4}s");
-                Console.WriteLine($"Confidence: {shotConfidence:F2}");
-                Console.WriteLine($"Actual target pos at miss: ({animTargetPos.X:F1}, {animTargetPos.Y:F1})");
-                Console.WriteLine($"Skillshot pos at miss: ({skillshotPos.X:F1}, {skillshotPos.Y:F1})");
-                Console.WriteLine($"Travel distance: {travelDist:F1} (range: {skillshotRange:F1})");
-                Console.WriteLine($"Distance to target: {Vector2.Distance(skillshotPos, animTargetPos):F1}");
-                if (shotWaypoints.Count > 0)
+                skillshotLaunched = true;
+                skillshotPos = casterPos;
+            }
+
+            if (skillshotLaunched)
+            {
+                skillshotPos += skillshotDir * skillshotSpeed * dt;
+
+                if (skillshotTrail.Count == 0 || Vector2.Distance(skillshotTrail[^1], skillshotPos) > 10)
+                    skillshotTrail.Add(skillshotPos);
+                if (skillshotTrail.Count > 30) skillshotTrail.RemoveAt(0);
+
+                float travelDist = Vector2.Distance(casterPos, skillshotPos);
+
+                // Check collision
+                float collisionDist = (skillshotWidth / 2) + targetHitbox;
+                if (Vector2.Distance(skillshotPos, animTargetPos) <= collisionDist)
                 {
-                    Console.WriteLine($"Waypoints: {string.Join(" -> ", shotWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
+                    hitResult = "HIT!";
+                    hitResultTimer = 1f;
+                    hitCount++;
+                    targetPos = animTargetPos;
+                    collisionPos = (skillshotPos + animTargetPos) / 2;
+                    collisionTime = fireTime;
+                    collisionDisplayTimer = 2f;
+                    
+                    if (continuousFiring)
+                    {
+                        pathTotalTime += fireTime;
+                        StartNewShot();
+                    }
+                    else
+                    {
+                        isFiring = false;
+                    }
                 }
-                
-                // Update path time and continue if in continuous mode
-                if (continuousFiring)
+                else if (travelDist > skillshotRange)
                 {
-                    pathTotalTime += fireTime;
-                    StartNewShot();
-                }
-                else
-                {
-                    isFiring = false;
+                    hitResult = "MISS";
+                    hitResultTimer = 1f;
+                    missCount++;
+                    targetPos = animTargetPos;
+                    
+                    if (continuousFiring)
+                    {
+                        pathTotalTime += fireTime;
+                        StartNewShot();
+                    }
+                    else
+                    {
+                        isFiring = false;
+                    }
                 }
             }
         }
@@ -592,23 +708,6 @@ while (!Raylib.WindowShouldClose())
             hitResult = "TIMEOUT";
             hitResultTimer = 1f;
             missCount++;
-            
-            // Log debug info on timeout (also a miss)
-            Console.WriteLine($"\n=== TIMEOUT - SHOT #{currentShotNumber} ===");
-            Console.WriteLine($"pathTotalTime: {shotPathTotalTime:F4}s");
-            Console.WriteLine($"Caster: ({shotCasterPos.X:F1}, {shotCasterPos.Y:F1})");
-            Console.WriteLine($"Target start (UI): ({shotTargetStartPos.X:F1}, {shotTargetStartPos.Y:F1})");
-            Console.WriteLine($"Current path pos: ({shotCurrentPathPos.X:F1}, {shotCurrentPathPos.Y:F1})");
-            Console.WriteLine($"Prev waypoint: ({shotPrevWaypoint.X:F1}, {shotPrevWaypoint.Y:F1})");
-            Console.WriteLine($"Next waypoint [{shotCurrentWaypointIndex}]: ({shotNextWaypoint.X:F1}, {shotNextWaypoint.Y:F1})");
-            Console.WriteLine($"CastPosition (aim): ({shotAimPos.X:F1}, {shotAimPos.Y:F1})");
-            Console.WriteLine($"PredictedTargetPos: ({shotPredictedTargetPos.X:F1}, {shotPredictedTargetPos.Y:F1})");
-            Console.WriteLine($"InterceptTime: {shotInterceptTime:F4}s");
-            Console.WriteLine($"Confidence: {shotConfidence:F2}");
-            if (shotWaypoints.Count > 0)
-            {
-                Console.WriteLine($"Waypoints: {string.Join(" -> ", shotWaypoints.Select(w => $"({w.X:F0},{w.Y:F0})"))}");
-            }
             
             if (continuousFiring)
             {
@@ -643,12 +742,30 @@ while (!Raylib.WindowShouldClose())
             var ultimateAim = new Vector2((float)ultimateHit2.CastPosition.X, (float)ultimateHit2.CastPosition.Y);
             var ultimatePredicted = new Vector2((float)ultimateHit2.PredictedTargetPosition.X, (float)ultimateHit2.PredictedTargetPosition.Y);
 
-            DrawSkillshotPreview(casterPos, ultimateAim, skillshotWidth, new Color(255, 215, 0, 40));
-            Raylib.DrawCircleV(ultimatePredicted, targetHitbox * 0.3f, new Color(255, 215, 0, 100));
-            Raylib.DrawCircleLinesV(ultimatePredicted, targetHitbox * 0.5f, new Color(255, 215, 0, 200));
-            Raylib.DrawCircleV(ultimateAim, 12, new Color(255, 230, 100, 220));
-            Raylib.DrawCircleLinesV(ultimateAim, 14, Color.White);
-            Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(255, 215, 0, 150));
+            if (isCircularMode)
+            {
+                // Circular spell preview - show radius at aim position
+                Raylib.DrawCircleV(ultimateAim, skillshotRadius, new Color(100, 200, 255, 40));
+                Raylib.DrawCircleLinesV(ultimateAim, skillshotRadius, new Color(100, 200, 255, 150));
+                // Show predicted target position
+                Raylib.DrawCircleV(ultimatePredicted, targetHitbox * 0.3f, new Color(255, 215, 0, 100));
+                Raylib.DrawCircleLinesV(ultimatePredicted, targetHitbox * 0.5f, new Color(255, 215, 0, 200));
+                // Aim point
+                Raylib.DrawCircleV(ultimateAim, 12, new Color(100, 230, 255, 220));
+                Raylib.DrawCircleLinesV(ultimateAim, 14, Color.White);
+                // Line from target to aim
+                Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(100, 200, 255, 150));
+            }
+            else
+            {
+                // Linear skillshot preview
+                DrawSkillshotPreview(casterPos, ultimateAim, skillshotWidth, new Color(255, 215, 0, 40));
+                Raylib.DrawCircleV(ultimatePredicted, targetHitbox * 0.3f, new Color(255, 215, 0, 100));
+                Raylib.DrawCircleLinesV(ultimatePredicted, targetHitbox * 0.5f, new Color(255, 215, 0, 200));
+                Raylib.DrawCircleV(ultimateAim, 12, new Color(255, 230, 100, 220));
+                Raylib.DrawCircleLinesV(ultimateAim, 14, Color.White);
+                Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(255, 215, 0, 150));
+            }
         }
     }
 
@@ -668,30 +785,56 @@ while (!Raylib.WindowShouldClose())
         Raylib.DrawCircleV(currentAnimTargetPos, targetHitbox, new Color(255, 80, 80, 200));
         Raylib.DrawCircleLinesV(currentAnimTargetPos, targetHitbox, Color.White);
 
-        // Skillshot trail
-        for (int i = 0; i < skillshotTrail.Count - 1; i++)
+        if (isCircularFiring)
         {
-            float alpha = (float)i / skillshotTrail.Count;
-            float trailLength = 20 * alpha;
-            DrawLinearSkillshot(skillshotTrail[i], skillshotDir, skillshotWidth * alpha, trailLength,
-                new Color((byte)255, (byte)215, (byte)0, (byte)(alpha * 100)));
-        }
-
-        // Skillshot
-        if (skillshotLaunched)
-        {
-            float spearLength = 80f;
-            DrawLinearSkillshot(skillshotPos, skillshotDir, skillshotWidth, spearLength,
-                new Color(255, 215, 0, 220));
-            DrawLinearSkillshotOutline(skillshotPos, skillshotDir, skillshotWidth, spearLength, Color.White);
+            // Circular spell animation
+            if (skillshotLaunched)
+            {
+                // Draw expanding circle at aim position
+                Raylib.DrawCircleV(fireAimPos, circularAnimRadius, new Color(100, 200, 255, 150));
+                Raylib.DrawCircleLinesV(fireAimPos, circularAnimRadius, new Color(150, 230, 255, 255));
+                // Draw target radius outline
+                Raylib.DrawCircleLinesV(fireAimPos, circularTargetRadius, new Color(100, 200, 255, 80));
+            }
+            else
+            {
+                // Charging animation at aim position
+                float delayProgress = fireTime / skillshotDelay;
+                float chargeRadius = circularTargetRadius * delayProgress * 0.5f;
+                Raylib.DrawCircleV(fireAimPos, chargeRadius, new Color((byte)100, (byte)200, (byte)255, (byte)(100 * delayProgress)));
+                Raylib.DrawCircleLinesV(fireAimPos, circularTargetRadius, new Color(100, 200, 255, 100));
+            }
+            // Aim point marker
+            Raylib.DrawCircleV(fireAimPos, 8, new Color(100, 230, 255, 200));
         }
         else
         {
-            float delayProgress = fireTime / skillshotDelay;
-            Raylib.DrawCircleV(casterPos, 35, new Color((byte)255, (byte)255, (byte)100, (byte)(150 * delayProgress)));
-        }
+            // Linear skillshot animation
+            // Skillshot trail
+            for (int i = 0; i < skillshotTrail.Count - 1; i++)
+            {
+                float alpha = (float)i / skillshotTrail.Count;
+                float trailLength = 20 * alpha;
+                DrawLinearSkillshot(skillshotTrail[i], skillshotDir, skillshotWidth * alpha, trailLength,
+                    new Color((byte)255, (byte)215, (byte)0, (byte)(alpha * 100)));
+            }
 
-        Raylib.DrawCircleLinesV(fireAimPos, 10, new Color(0, 255, 100, 150));
+            // Skillshot
+            if (skillshotLaunched)
+            {
+                float spearLength = 80f;
+                DrawLinearSkillshot(skillshotPos, skillshotDir, skillshotWidth, spearLength,
+                    new Color(255, 215, 0, 220));
+                DrawLinearSkillshotOutline(skillshotPos, skillshotDir, skillshotWidth, spearLength, Color.White);
+            }
+            else
+            {
+                float delayProgress = fireTime / skillshotDelay;
+                Raylib.DrawCircleV(casterPos, 35, new Color((byte)255, (byte)255, (byte)100, (byte)(150 * delayProgress)));
+            }
+
+            Raylib.DrawCircleLinesV(fireAimPos, 10, new Color(0, 255, 100, 150));
+        }
     }
 
     // Draw caster
@@ -761,8 +904,12 @@ while (!Raylib.WindowShouldClose())
     }
 
     // UI (screen space)
-    DrawUI(arialFont, ultimateResult, targetSpeed, skillshotSpeed, skillshotRange,
-           presets[currentPreset].Name, hitCount, missCount, camera.Zoom,
+    string currentPresetName = isCircularMode 
+        ? circularPresets[currentCircularPreset].Name 
+        : linearPresets[currentLinearPreset].Name;
+    DrawUI(font, ultimateResult, targetSpeed, skillshotSpeed, skillshotRange,
+           skillshotRadius, skillshotDelay, isCircularMode,
+           currentPresetName, hitCount, missCount, camera.Zoom,
            timeLabels, currentTimeIndex, pathModeActive, waypoints.Count);
 
     // Collision info overlay
@@ -782,8 +929,10 @@ Raylib.CloseWindow();
 
 static void HandleInput(ref Vector2 casterPos, ref Vector2 targetPos, ref Vector2 targetVelocity,
                        ref float targetSpeed, ref float skillshotSpeed, ref float skillshotRange,
-                       ref float skillshotWidth, ref float skillshotDelay,
-                       (string, Vector2, float, float, float, float)[] presets, ref int currentPreset,
+                       ref float skillshotWidth, ref float skillshotDelay, ref float skillshotRadius,
+                       (string Name, Vector2 Vel, float Speed, float Range, float Width, float Delay)[] linearPresets,
+                       (string Name, float Radius, float Range, float Delay)[] circularPresets,
+                       ref int currentLinearPreset, ref int currentCircularPreset, ref bool isCircularMode,
                        bool isFiring, Vector2 mouseWorld, List<Vector2> waypoints, ref bool pathModeActive,
                        ref Vector2 pathStartPos, ref float pathElapsedTime)
 {
@@ -847,15 +996,49 @@ static void HandleInput(ref Vector2 casterPos, ref Vector2 targetPos, ref Vector
     if (Raylib.IsKeyPressed(KeyboardKey.E)) skillshotSpeed = Math.Max(500, skillshotSpeed - 100);
     if (Raylib.IsKeyPressed(KeyboardKey.R)) skillshotSpeed = Math.Min(3500, skillshotSpeed + 100);
 
+    // TAB cycles through presets within current mode
     if (Raylib.IsKeyPressed(KeyboardKey.Tab))
     {
-        currentPreset = (currentPreset + 1) % presets.Length;
-        var preset = presets[currentPreset];
-        targetVelocity = preset.Item2;
-        skillshotSpeed = preset.Item3;
-        skillshotRange = preset.Item4;
-        skillshotWidth = preset.Item5;
-        skillshotDelay = preset.Item6;
+        if (isCircularMode)
+        {
+            currentCircularPreset = (currentCircularPreset + 1) % circularPresets.Length;
+            var preset = circularPresets[currentCircularPreset];
+            skillshotRadius = preset.Radius;
+            skillshotRange = preset.Range;
+            skillshotDelay = preset.Delay;
+        }
+        else
+        {
+            currentLinearPreset = (currentLinearPreset + 1) % linearPresets.Length;
+            var preset = linearPresets[currentLinearPreset];
+            targetVelocity = preset.Vel;
+            skillshotSpeed = preset.Speed;
+            skillshotRange = preset.Range;
+            skillshotWidth = preset.Width;
+            skillshotDelay = preset.Delay;
+        }
+    }
+
+    // Grave/tilde toggles between circular and linear mode
+    if (Raylib.IsKeyPressed(KeyboardKey.Grave))
+    {
+        isCircularMode = !isCircularMode;
+        // Apply current preset for the new mode
+        if (isCircularMode)
+        {
+            var preset = circularPresets[currentCircularPreset];
+            skillshotRadius = preset.Radius;
+            skillshotRange = preset.Range;
+            skillshotDelay = preset.Delay;
+        }
+        else
+        {
+            var preset = linearPresets[currentLinearPreset];
+            skillshotSpeed = preset.Speed;
+            skillshotRange = preset.Range;
+            skillshotWidth = preset.Width;
+            skillshotDelay = preset.Delay;
+        }
     }
 }
 
@@ -954,6 +1137,7 @@ static void DrawLinearSkillshotOutline(Vector2 center, Vector2 direction, float 
 
 static void DrawUI(Font font, PredictionResult? ultimateResult,
                   float targetSpeed, float skillshotSpeed, float skillshotRange,
+                  float skillshotRadius, float skillshotDelay, bool isCircularMode,
                   string presetName, int hits, int misses, float zoom,
                   string[] timeLabels, int currentTimeIndex, bool pathModeActive, int waypointCount)
 {
@@ -972,15 +1156,26 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     Raylib.DrawTextEx(font, "Behind-Edge Prediction", new Vector2(130, y + 4), fontSize, spacing, Color.White);
     y += 30;
 
-    Raylib.DrawTextEx(font, $"Preset: {presetName}", new Vector2(20, y), smallFont, spacing, Color.Yellow);
+    // Mode indicator
+    var modeColor = isCircularMode ? new Color(100, 200, 255, 255) : new Color(255, 200, 100, 255);
+    var modeText = isCircularMode ? "[CIRCULAR]" : "[LINEAR]";
+    Raylib.DrawTextEx(font, $"{modeText} {presetName}", new Vector2(20, y), smallFont, spacing, modeColor);
     // Path mode indicator
     if (pathModeActive)
     {
-        Raylib.DrawTextEx(font, $"  PATH MODE ({waypointCount} pts)", new Vector2(200, y), smallFont, spacing, new Color(100, 200, 255, 255));
+        Raylib.DrawTextEx(font, $"  PATH ({waypointCount} pts)", new Vector2(280, y), smallFont, spacing, new Color(100, 200, 255, 255));
     }
     y += lineHeight;
 
-    Raylib.DrawTextEx(font, $"Target: {targetSpeed:F0}  Projectile: {skillshotSpeed:F0}  Range: {skillshotRange:F0}", new Vector2(20, y), smallFont, spacing, Color.LightGray);
+    // Show appropriate stats based on mode
+    if (isCircularMode)
+    {
+        Raylib.DrawTextEx(font, $"Target: {targetSpeed:F0}  Radius: {skillshotRadius:F0}  Delay: {skillshotDelay:F2}s", new Vector2(20, y), smallFont, spacing, Color.LightGray);
+    }
+    else
+    {
+        Raylib.DrawTextEx(font, $"Target: {targetSpeed:F0}  Projectile: {skillshotSpeed:F0}  Range: {skillshotRange:F0}", new Vector2(20, y), smallFont, spacing, Color.LightGray);
+    }
     y += lineHeight;
 
     // Stats
@@ -1042,8 +1237,8 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
 
     // Controls panel
     int ctrlY = 220;
-    Raylib.DrawRectangle(10, ctrlY, 420, 135, new Color(0, 0, 0, 200));
-    Raylib.DrawRectangleLines(10, ctrlY, 420, 135, new Color(80, 80, 100, 255));
+    Raylib.DrawRectangle(10, ctrlY, 420, 155, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, ctrlY, 420, 155, new Color(80, 80, 100, 255));
 
     Raylib.DrawTextEx(font, "CONTROLS", new Vector2(20, ctrlY + 8), fontSize, spacing, Color.White);
     ctrlY += 28;
@@ -1053,5 +1248,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     ctrlY += lineHeight;
     Raylib.DrawTextEx(font, "DEL/Backspace : Clear waypoints", new Vector2(20, ctrlY), smallFont, spacing, new Color(100, 200, 255, 255));
     ctrlY += lineHeight;
-    Raylib.DrawTextEx(font, "TAB : Skills  |  Q/W E/R : Speed", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
+    Raylib.DrawTextEx(font, "TAB : Cycle presets  |  ` : Toggle mode", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
+    ctrlY += lineHeight;
+    Raylib.DrawTextEx(font, "Q/W : Target speed  |  E/R : Projectile speed", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
 }
