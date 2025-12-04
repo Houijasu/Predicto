@@ -76,7 +76,7 @@ public sealed class TargetPath
 
         var direction = Waypoints[CurrentWaypointIndex] - CurrentPosition;
         var length = direction.Length;
-        
+
         if (length < Constants.Epsilon)
             return new Vector2D(0, 0);
 
@@ -118,7 +118,7 @@ public sealed class TargetPath
                 remainingDistance = 0;
             }
         }
-        
+
         // Target stops at last waypoint (no continuation)
 
         return position;
@@ -133,7 +133,7 @@ public sealed class TargetPath
             return 0;
 
         double length = (Waypoints[CurrentWaypointIndex] - CurrentPosition).Length;
-        
+
         for (int i = CurrentWaypointIndex; i < Waypoints.Count - 1; i++)
         {
             length += (Waypoints[i + 1] - Waypoints[i]).Length;
@@ -149,7 +149,7 @@ public sealed class TargetPath
     {
         if (Speed < Constants.Epsilon)
             return double.PositiveInfinity;
-        
+
         return GetRemainingPathLength() / Speed;
     }
 
@@ -198,8 +198,35 @@ public sealed class TargetPath
     }
 
     /// <summary>
+    /// Gets the total number of path segments from current position through all remaining waypoints.
+    /// </summary>
+    public int SegmentCount => CurrentWaypointIndex >= Waypoints.Count ? 0 : Waypoints.Count - CurrentWaypointIndex;
+
+    /// <summary>
+    /// Gets a path segment by index (0-based from current position).
+    /// More efficient than EnumerateSegments for indexed access patterns.
+    /// </summary>
+    /// <param name="index">Segment index (0 = current position to first waypoint)</param>
+    /// <returns>The path segment at the specified index</returns>
+    /// <exception cref="ArgumentOutOfRangeException">If index is out of range</exception>
+    public PathSegment GetSegment(int index)
+    {
+        if (index < 0 || index >= SegmentCount)
+            throw new ArgumentOutOfRangeException(nameof(index), $"Segment index {index} is out of range [0, {SegmentCount})");
+
+        if (index == 0)
+        {
+            return new PathSegment(CurrentPosition, Waypoints[CurrentWaypointIndex], CurrentWaypointIndex);
+        }
+
+        int waypointIndex = CurrentWaypointIndex + index;
+        return new PathSegment(Waypoints[waypointIndex - 1], Waypoints[waypointIndex], waypointIndex);
+    }
+
+    /// <summary>
     /// Enumerates all path segments as (start, end, segmentIndex) tuples.
     /// First segment starts from CurrentPosition.
+    /// For performance-critical code, consider using SegmentCount and GetSegment(int) instead.
     /// </summary>
     public IEnumerable<PathSegment> EnumerateSegments()
     {
@@ -232,6 +259,17 @@ public readonly record struct PathSegment(Point2D Start, Point2D End, int Waypoi
 
     /// <summary>
     /// Direction vector (normalized) of this segment.
+    /// Returns zero vector for zero-length segments to avoid division by zero.
     /// </summary>
-    public Vector2D Direction => (End - Start).Normalize();
+    public Vector2D Direction
+    {
+        get
+        {
+            var delta = End - Start;
+            var length = delta.Length;
+            if (length < Constants.Epsilon)
+                return new Vector2D(0, 0);
+            return delta.Normalize();
+        }
+    }
 }

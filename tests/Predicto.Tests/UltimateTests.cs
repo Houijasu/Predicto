@@ -118,7 +118,7 @@ public class UltimateTests
 
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Behind-edge should have later intercept time than early edge
         Assert.True(hit.InterceptTime > 0);
         // Predicted position should be ahead of initial position (target moving right)
@@ -140,7 +140,7 @@ public class UltimateTests
 
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Stationary target - aim at target position
         Assert.Equal(500, hit.CastPosition.X, precision: 1);
         Assert.Equal(0, hit.CastPosition.Y, precision: 1);
@@ -165,11 +165,11 @@ public class UltimateTests
         // Aim point should be SOUTH (lower Y) of predicted target position
         Assert.True(hit.CastPosition.Y < hit.PredictedTargetPosition.Y,
             $"Aim point Y ({hit.CastPosition.Y:F1}) should be < predicted target Y ({hit.PredictedTargetPosition.Y:F1}) - aiming behind");
-        
+
         // The offset should be approximately (effectiveRadius - adaptiveMargin)
         // With adaptive margin based on half spell width, the offset will be smaller
         double yOffset = hit.PredictedTargetPosition.Y - hit.CastPosition.Y;
-        double effectiveRadius = 65 + 70/2.0; // 100
+        double effectiveRadius = 65 + 70 / 2.0; // 100
         // Adaptive margin is clamped to max 50% of effectiveRadius = 50
         double maxMargin = effectiveRadius * 0.5;
         double minExpectedOffset = effectiveRadius - maxMargin; // 50
@@ -216,16 +216,16 @@ public class UltimateTests
             behindMargin: 1.0);
 
         Assert.NotNull(result);
-        
+
         var (aimPoint, predictedPos, interceptTime) = result.Value;
-        
+
         // Predicted position should have positive Y (target moved north)
         Assert.True(predictedPos.Y > 0, "Target should have moved north");
-        
+
         // Aim point should be SOUTH of predicted position (behind target)
-        Assert.True(aimPoint.Y < predictedPos.Y, 
+        Assert.True(aimPoint.Y < predictedPos.Y,
             $"Aim point Y ({aimPoint.Y:F1}) should be < predicted Y ({predictedPos.Y:F1})");
-        
+
         // X should be approximately same (target only moving in Y)
         Assert.True(Math.Abs(aimPoint.X - predictedPos.X) < 1,
             "X coordinates should be nearly equal");
@@ -330,7 +330,7 @@ public class UltimateTests
 
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Compare with target moving toward caster (easier prediction)
         var inputToward = new PredictionInput(
             CasterPosition: new Point2D(0, 0),
@@ -404,7 +404,7 @@ public class UltimateTests
 
         Assert.IsType<PredictionResult.Hit>(fastResult);
         Assert.IsType<PredictionResult.Hit>(slowResult);
-        
+
         var fastHit = (PredictionResult.Hit)fastResult;
         var slowHit = (PredictionResult.Hit)slowResult;
 
@@ -456,7 +456,7 @@ public class UltimateTests
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        
+
         int hits = 0;
         int outOfRange = 0;
         int unreachable = 0;
@@ -476,12 +476,12 @@ public class UltimateTests
 
         // Log results
         var avgMs = sw.ElapsedMilliseconds / 1000.0;
-        
+
         // Assertions
-        Assert.True(sw.ElapsedMilliseconds < 500, 
+        Assert.True(sw.ElapsedMilliseconds < 500,
             $"1000 predictions should complete in <500ms, took {sw.ElapsedMilliseconds}ms");
         Assert.True(hits > 500, $"Most predictions should be hits, got {hits}/1000");
-        
+
         // Output for debugging
         // Hits: {hits}, OutOfRange: {outOfRange}, Unreachable: {unreachable}
         // Avg time per prediction: {avgMs:F4}ms
@@ -526,9 +526,9 @@ public class UltimateTests
         swHard.Stop();
 
         // Both should complete reasonably fast
-        Assert.True(swEasy.ElapsedMilliseconds < 200, 
+        Assert.True(swEasy.ElapsedMilliseconds < 200,
             $"500 easy predictions should take <200ms, took {swEasy.ElapsedMilliseconds}ms");
-        Assert.True(swHard.ElapsedMilliseconds < 300, 
+        Assert.True(swHard.ElapsedMilliseconds < 300,
             $"500 hard predictions should take <300ms, took {swHard.ElapsedMilliseconds}ms");
     }
 }

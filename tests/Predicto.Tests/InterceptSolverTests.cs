@@ -683,14 +683,14 @@ public class InterceptSolverTests
 
         // Both should produce valid hits
         double effectiveRadius = hitbox + width / 2;
-        
+
         // Calculate separations
         var (secantAim, _, _) = secantResult.Value;
         var (fullAim, _, fullTime) = fullResult.Value;
 
         double secantDist = (secantAim - casterPos).Length;
         double fullDist = (fullAim - casterPos).Length;
-        
+
         double secantArrival = delay + secantDist / speed;
         double fullArrival = delay + fullDist / speed;
 
@@ -1156,7 +1156,7 @@ public class InterceptSolverTests
 
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Target is moving up (north), so predicted position should be above starting position
         Assert.True(hit.PredictedTargetPosition.Y > 0);
     }

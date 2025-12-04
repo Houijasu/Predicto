@@ -73,7 +73,8 @@ public sealed class Ultimate : IPrediction
         if (input.Skillshot.Speed > Constants.MaxReasonableSkillshotSpeed)
             return new PredictionResult.Unreachable("Skillshot speed exceeds reasonable bounds");
 
-        // === Geometry Setup ===
+        // === Geometry Setup (cache commonly used values) ===
+        var currentVelocity = path.GetCurrentVelocity();
         var displacement = path.CurrentPosition - input.CasterPosition;
         double distance = displacement.Length;
         double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
@@ -81,7 +82,7 @@ public sealed class Ultimate : IPrediction
         // === Early Out: Target clearly out of range and moving away ===
         if (distance > input.Skillshot.Range + effectiveRadius)
         {
-            double dotProduct = displacement.DotProduct(path.GetCurrentVelocity());
+            double dotProduct = displacement.DotProduct(currentVelocity);
             if (dotProduct > 0) // Moving away
             {
                 double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
@@ -100,12 +101,7 @@ public sealed class Ultimate : IPrediction
         }
 
         // === Calculate Adaptive Margin ===
-        double adaptiveMargin = CalculateAdaptiveMargin(
-            path.Speed,
-            distance,
-            input.Skillshot.Speed,
-            input.Skillshot.Width,
-            effectiveRadius);
+        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
 
         // === Solve Path-Based BEHIND-TARGET Interception ===
         var result = InterceptSolver.SolvePathBehindTargetIntercept(
@@ -136,7 +132,6 @@ public sealed class Ultimate : IPrediction
         }
 
         // === Calculate Enhanced Confidence ===
-        var currentVelocity = path.GetCurrentVelocity();
         double confidence = CalculateEnhancedConfidence(
             interceptResult.InterceptTime,
             distance,
@@ -162,7 +157,9 @@ public sealed class Ultimate : IPrediction
         double remainingPathTime = path.GetRemainingPathTime();
         if (remainingPathTime > Constants.Epsilon)
         {
-            double segmentProgress = interceptResult.InterceptTime / remainingPathTime;
+            // Clamp segmentProgress to [0, 1] to prevent negative penalties
+            // when interceptTime > remainingPathTime (target stopped at final waypoint)
+            double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
             // Apply mild penalty for predictions deep into the path (linear decay)
             // At 100% path progress: 0.5x confidence, at 50%: 0.75x
             double segmentPenalty = 1 - 0.5 * segmentProgress;
@@ -200,14 +197,14 @@ public sealed class Ultimate : IPrediction
         {
             double dotProduct = displacement.DotProduct(input.TargetVelocity);
             bool movingAway = dotProduct > 0;
-            
+
             if (movingAway)
             {
                 // Calculate if target can possibly be caught
                 // Max time = (range + effectiveRadius) / skillshotSpeed
                 double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
                 double futureDistance = distance + targetSpeed * maxReachTime;
-                
+
                 if (futureDistance > input.Skillshot.Range + effectiveRadius)
                     return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
             }
@@ -233,12 +230,7 @@ public sealed class Ultimate : IPrediction
 
         // === Calculate Adaptive Margin ===
         // Use half of spell width as base margin for more reliable hits
-        double adaptiveMargin = CalculateAdaptiveMargin(
-            targetSpeed, 
-            distance, 
-            input.Skillshot.Speed,
-            input.Skillshot.Width,
-            effectiveRadius);
+        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
 
         // === Determine Refinement Strategy ===
         // Easy cases: close range, slow target, or target moving toward caster
@@ -343,34 +335,21 @@ public sealed class Ultimate : IPrediction
     }
 
     /// <summary>
-    /// Calculates adaptive margin based on prediction uncertainty factors.
+    /// Calculates adaptive margin for the "behind target" strategy.
     /// 
-    /// The margin determines how far "inside" the collision zone we aim.
-    /// Larger margins = more reliable hits but less optimal positioning.
-    /// Smaller margins = more aggressive but risk missing due to:
-    ///   - Target velocity prediction errors
-    ///   - Network latency variations
-    ///   - Floating-point precision accumulation
+    /// For linear skillshots, we aim at the trailing edge (epsilon margin) for maximum
+    /// aggressiveness. LoL uses swept collision detection between ticks, so edge hits register.
     /// 
-    /// Factors considered:
-    /// - Target speed: Faster targets have more prediction uncertainty
-    /// - Distance: Farther targets accumulate more positional error over flight time
-    /// - Speed ratio: When target speed approaches skillshot speed, small errors amplify
+    /// The margin is clamped for very small effective radii to maintain valid collision geometry.
     /// </summary>
-    private static double CalculateAdaptiveMargin(
-        double targetSpeed,
-        double distance,
-        double skillshotSpeed,
-        double skillshotWidth,
-        double effectiveRadius)
+    /// <param name="effectiveRadius">Combined collision radius (target hitbox + skillshot width/2)</param>
+    /// <returns>Margin in game units</returns>
+    private static double CalculateAdaptiveMargin(double effectiveRadius)
     {
-        // Maximum aggressiveness: aim as close to the trailing edge as possible
-        // LoL uses swept collision detection between ticks, so even edge hits register
-        
-        // For very small effective radii, scale proportionally
+        // For very small effective radii, use proportional scaling to maintain valid geometry
         if (effectiveRadius < 1.0)
             return effectiveRadius * 0.5;
-        
+
         // Use epsilon margin for pixel-perfect trailing edge hits
         // This is maximally aggressive - essentially aiming at the exact edge
         return Constants.Epsilon;
@@ -406,12 +385,12 @@ public sealed class Ultimate : IPrediction
         {
             double displacementLength = displacement.Length;
             double velocityLength = targetVelocity.Length;
-            
+
             if (displacementLength > Constants.Epsilon && velocityLength > Constants.Epsilon)
             {
                 double dotProduct = displacement.DotProduct(targetVelocity);
                 double cosAngle = Math.Abs(dotProduct / (displacementLength * velocityLength));
-                
+
                 // Scale confidence: perpendicular (cos=0) → 0.5, parallel (cos=1) → 1.0
                 approachAngleFactor = 0.5 + 0.5 * cosAngle;
             }
@@ -605,7 +584,7 @@ public sealed class Ultimate : IPrediction
             double dotProduct = displacement.DotProduct(input.TargetVelocity);
             double cosAngle = dotProduct / (displacement.Length * targetSpeed);
             cosAngle = Math.Clamp(cosAngle, -1.0, 1.0);
-            
+
             // Targets moving toward/away from caster are easier to predict
             // Targets moving perpendicular are harder (use same formula as linear)
             double angleFactor = 0.5 + 0.5 * Math.Abs(cosAngle);
