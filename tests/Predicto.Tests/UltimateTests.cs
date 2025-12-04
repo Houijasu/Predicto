@@ -531,4 +531,205 @@ public class UltimateTests
         Assert.True(swHard.ElapsedMilliseconds < 300,
             $"500 hard predictions should take <300ms, took {swHard.ElapsedMilliseconds}ms");
     }
+
+    #region Multi-Target Priority Selection Tests
+
+    [Fact]
+    public void RankTargets_ReturnsHighestConfidenceFirst()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0);
+
+        var targets = new TargetCandidate[]
+        {
+            // Far target, moving away = lower confidence
+            new(new Point2D(800, 0), new Vector2D(300, 0), Tag: "far"),
+            // Close stationary target = highest confidence
+            new(new Point2D(400, 0), new Vector2D(0, 0), Tag: "close_stationary"),
+            // Medium target, moving perpendicular = medium confidence
+            new(new Point2D(500, 0), new Vector2D(0, 200), Tag: "medium")
+        };
+
+        var ranked = _prediction.RankTargets(casterPos, skillshot, targets);
+
+        Assert.Equal(3, ranked.Count);
+        // Close stationary should be first (highest confidence)
+        Assert.Equal("close_stationary", ranked[0].Tag);
+        // All should be hittable
+        Assert.All(ranked, t => Assert.True(t.IsHittable));
+    }
+
+    [Fact]
+    public void RankTargets_PriorityWeightAffectsRanking()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0);
+
+        // Two targets at same distance with same confidence
+        // But different priority weights
+        var targets = new TargetCandidate[]
+        {
+            new(new Point2D(400, 0), new Vector2D(0, 0), PriorityWeight: 0.5, Tag: "low_priority"),
+            new(new Point2D(400, 0), new Vector2D(0, 0), PriorityWeight: 2.0, Tag: "high_priority")
+        };
+
+        var ranked = _prediction.RankTargets(casterPos, skillshot, targets);
+
+        Assert.Equal(2, ranked.Count);
+        // High priority target should be first despite same confidence
+        Assert.Equal("high_priority", ranked[0].Tag);
+        Assert.Equal("low_priority", ranked[1].Tag);
+    }
+
+    [Fact]
+    public void RankTargets_OutOfRangeTargetsRankedLower()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 500, Width: 70, Delay: 0);
+
+        var targets = new TargetCandidate[]
+        {
+            // Out of range
+            new(new Point2D(1000, 0), new Vector2D(0, 0), Tag: "out_of_range"),
+            // In range
+            new(new Point2D(300, 0), new Vector2D(0, 0), Tag: "in_range")
+        };
+
+        var ranked = _prediction.RankTargets(casterPos, skillshot, targets);
+
+        Assert.Equal(2, ranked.Count);
+        // In range target should be first
+        Assert.Equal("in_range", ranked[0].Tag);
+        Assert.True(ranked[0].IsHittable);
+        Assert.Equal("out_of_range", ranked[1].Tag);
+        Assert.False(ranked[1].IsHittable);
+    }
+
+    [Fact]
+    public void RankTargets_EmptyArray_ReturnsEmpty()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0);
+
+        var ranked = _prediction.RankTargets(casterPos, skillshot, ReadOnlySpan<TargetCandidate>.Empty);
+
+        Assert.Empty(ranked);
+    }
+
+    [Fact]
+    public void GetBestTarget_ReturnsHighestPriorityHittable()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0);
+
+        var targets = new TargetCandidate[]
+        {
+            new(new Point2D(500, 0), new Vector2D(100, 0), Tag: "target1"),
+            new(new Point2D(400, 0), new Vector2D(0, 0), Tag: "best_target"),
+            new(new Point2D(600, 0), new Vector2D(0, 200), Tag: "target3")
+        };
+
+        var best = _prediction.GetBestTarget(casterPos, skillshot, targets);
+
+        Assert.NotNull(best);
+        Assert.Equal("best_target", best.Value.Tag);
+        Assert.True(best.Value.IsHittable);
+    }
+
+    [Fact]
+    public void GetBestTarget_NoHittableTargets_ReturnsNull()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 300, Width: 70, Delay: 0);
+
+        // All targets out of range
+        var targets = new TargetCandidate[]
+        {
+            new(new Point2D(1000, 0), new Vector2D(0, 0), Tag: "far1"),
+            new(new Point2D(1200, 0), new Vector2D(0, 0), Tag: "far2")
+        };
+
+        var best = _prediction.GetBestTarget(casterPos, skillshot, targets);
+
+        Assert.Null(best);
+    }
+
+    [Fact]
+    public void RankTargetsCircular_RanksCorrectly()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new CircularSkillshot(Radius: 200, Range: 900, Delay: 0.5);
+
+        var targets = new TargetCandidate[]
+        {
+            // Moving fast = harder to predict
+            new(new Point2D(500, 0), new Vector2D(0, 400), Tag: "fast_mover"),
+            // Stationary = easy target
+            new(new Point2D(500, 0), new Vector2D(0, 0), Tag: "stationary")
+        };
+
+        var ranked = _prediction.RankTargetsCircular(casterPos, skillshot, targets);
+
+        Assert.Equal(2, ranked.Count);
+        // Stationary should be first (highest confidence)
+        Assert.Equal("stationary", ranked[0].Tag);
+    }
+
+    [Fact]
+    public void RankTargets_WithPath_WorksCorrectly()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0);
+
+        // Target with a path - start at first waypoint moving toward second
+        var path = TargetPath.FromDestination(
+            new Point2D(500, 0),
+            new Point2D(700, 200),
+            speed: 350);
+
+        var targets = new TargetCandidate[]
+        {
+            TargetCandidate.WithPath(path, tag: "pathed_target"),
+            TargetCandidate.Stationary(new Point2D(400, 0), tag: "stationary_target")
+        };
+
+        var ranked = _prediction.RankTargets(casterPos, skillshot, targets);
+
+        Assert.Equal(2, ranked.Count);
+        Assert.All(ranked, t => Assert.True(t.IsHittable));
+    }
+
+    [Fact]
+    public void RankTargets_Performance_ManyTargets()
+    {
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25);
+        var random = new Random(12345);
+
+        // Create 20 targets (realistic team fight scenario)
+        var targets = new TargetCandidate[20];
+        for (int i = 0; i < 20; i++)
+        {
+            targets[i] = new TargetCandidate(
+                new Point2D(200 + random.NextDouble() * 700, -300 + random.NextDouble() * 600),
+                new Vector2D(-200 + random.NextDouble() * 400, -200 + random.NextDouble() * 400),
+                HitboxRadius: 65,
+                PriorityWeight: 0.5 + random.NextDouble() * 2.0,
+                Tag: $"target_{i}");
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 100; i++)
+        {
+            var ranked = _prediction.RankTargets(casterPos, skillshot, targets);
+            Assert.NotEmpty(ranked);
+        }
+        sw.Stop();
+
+        // 100 iterations of ranking 20 targets should be fast
+        Assert.True(sw.ElapsedMilliseconds < 500,
+            $"100 iterations of ranking 20 targets should take <500ms, took {sw.ElapsedMilliseconds}ms");
+    }
+
+    #endregion
 }

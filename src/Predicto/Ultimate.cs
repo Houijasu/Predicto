@@ -200,10 +200,14 @@ public sealed class Ultimate : IPrediction
 
             if (movingAway)
             {
-                // Calculate if target can possibly be caught
-                // Max time = (range + effectiveRadius) / skillshotSpeed
+                // Calculate if target can possibly be caught using accurate vector math
+                // Max time = (range + effectiveRadius) / skillshotSpeed + delay
                 double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
-                double futureDistance = distance + targetSpeed * maxReachTime;
+                
+                // Compute exact future position using vector math instead of magnitude approximation
+                // This handles angled movement correctly
+                var futureTargetPos = input.TargetPosition + input.TargetVelocity * maxReachTime;
+                double futureDistance = (futureTargetPos - input.CasterPosition).Length;
 
                 if (futureDistance > input.Skillshot.Range + effectiveRadius)
                     return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
@@ -314,6 +318,13 @@ public sealed class Ultimate : IPrediction
 
     /// <summary>
     /// Determines if this is an "easy" prediction case that doesn't need full refinement.
+    /// 
+    /// Easy cases use only Secant refinement (faster).
+    /// Hard cases use full Triple Refinement (Quadratic → Secant → Bisection).
+    /// 
+    /// Criteria for easy case:
+    /// 1. Target moves less than half a unit per server tick (nearly stationary)
+    /// 2. Target moving significantly toward caster (easier geometry)
     /// </summary>
     private static bool IsEasyCase(
         double distance,
@@ -322,14 +333,23 @@ public sealed class Ultimate : IPrediction
         Vector2D targetVelocity,
         double skillshotSpeed)
     {
-        // Slow targets are easy (target moves less than half a tick's worth per skillshot tick)
-        if (targetSpeed < skillshotSpeed * 0.5 / Constants.ServerTickRate)
+        // Criterion 1: Target moves negligibly per tick
+        // If target moves < 0.5 units per tick, the prediction is trivial
+        // Formula: targetSpeed * tickDuration < 0.5
+        double movementPerTick = targetSpeed * Constants.TickDuration;
+        if (movementPerTick < 0.5)
             return true;
 
-        // Target moving toward caster (easier to hit)
+        // Criterion 2: Target moving toward caster (easier to hit)
+        // Dot product < 0 means moving toward caster
+        // We require significant approach: |cos(angle)| > 0.5 (within 60° of direct approach)
         double dotProduct = displacement.DotProduct(targetVelocity);
-        if (dotProduct < 0 && Math.Abs(dotProduct) > targetSpeed * distance * 0.5)
-            return true;
+        if (dotProduct < 0 && distance > Constants.Epsilon)
+        {
+            double cosAngle = Math.Abs(dotProduct) / (targetSpeed * distance);
+            if (cosAngle > 0.5)
+                return true;
+        }
 
         return false;
     }
@@ -337,26 +357,48 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Calculates adaptive margin for the "behind target" strategy.
     /// 
-    /// For linear skillshots, we aim at the trailing edge (epsilon margin) for maximum
+    /// For linear skillshots, we aim at the trailing edge with a small margin for maximum
     /// aggressiveness. LoL uses swept collision detection between ticks, so edge hits register.
     /// 
-    /// The margin is clamped for very small effective radii to maintain valid collision geometry.
+    /// The margin uses a continuous function to avoid discontinuities at threshold boundaries.
+    /// For very small effective radii, the margin scales proportionally to maintain valid geometry.
+    /// For normal radii, we use a minimal but non-zero margin (1 game unit) for reliability.
+    /// 
+    /// Note: The InterceptSolver also clamps margin to ensure it's less than effectiveRadius,
+    /// but we apply defensive clamping here as well for clarity.
     /// </summary>
     /// <param name="effectiveRadius">Combined collision radius (target hitbox + skillshot width/2)</param>
-    /// <returns>Margin in game units</returns>
+    /// <returns>Margin in game units, guaranteed to be less than effectiveRadius</returns>
     private static double CalculateAdaptiveMargin(double effectiveRadius)
     {
-        // For very small effective radii, use proportional scaling to maintain valid geometry
-        if (effectiveRadius < 1.0)
-            return effectiveRadius * 0.5;
+        // Handle degenerate case
+        if (effectiveRadius <= Constants.Epsilon)
+            return 0;
 
-        // Use epsilon margin for pixel-perfect trailing edge hits
-        // This is maximally aggressive - essentially aiming at the exact edge
-        return Constants.Epsilon;
+        double margin;
+
+        // Use proportional margin (50% of effective radius) for small radii,
+        // transitioning smoothly to a fixed margin for normal gameplay radii.
+        // The threshold ensures smooth transition: at SmallRadiusThreshold, both formulas give the same value.
+        if (effectiveRadius <= Constants.SmallRadiusThreshold)
+        {
+            margin = effectiveRadius * 0.5;
+        }
+        else
+        {
+            // Use TrailingEdgeMargin (1 game unit) for normal gameplay scenarios
+            // This is aggressive (barely inside collision zone) while maintaining reliability
+            margin = Constants.TrailingEdgeMargin;
+        }
+
+        // Defensive clamp: margin must be strictly less than effectiveRadius
+        // This ensures the aim point is always inside the collision zone
+        return Math.Min(margin, effectiveRadius - Constants.Epsilon);
     }
 
     /// <summary>
-    /// Enhanced confidence calculation that factors in approach angle and movement patterns.
+    /// Enhanced confidence calculation that factors in approach angle, movement patterns,
+    /// and human reaction time limitations.
     /// </summary>
     private static double CalculateEnhancedConfidence(
         double interceptTime,
@@ -402,8 +444,14 @@ public sealed class Ultimate : IPrediction
         double speedRatio = targetSpeed / Constants.MaxReasonableVelocity;
         double consistencyFactor = 1.0 - speedRatio * 0.5;
 
+        // === Reaction Time Factor ===
+        // If projectile arrives before target can react, confidence increases
+        // Flight time = intercept time - cast delay
+        double flightTime = Math.Max(0, interceptTime - castDelay);
+        double reactionTimeFactor = Constants.GetReactionTimeFactor(flightTime);
+
         // Combine factors
-        double enhancedConfidence = baseConfidence * approachAngleFactor * consistencyFactor;
+        double enhancedConfidence = baseConfidence * approachAngleFactor * consistencyFactor * reactionTimeFactor;
 
         return Math.Clamp(enhancedConfidence, Constants.Epsilon, 1.0);
     }
@@ -491,7 +539,7 @@ public sealed class Ultimate : IPrediction
             input.Skillshot.Delay,
             input.TargetHitboxRadius,
             input.Skillshot.Range,
-            behindMargin: CalculateCircularAdaptiveMargin(path.Speed, input.Skillshot.Delay, effectiveRadius));
+            behindMargin: CalculateCircularAdaptiveMargin(effectiveRadius));
 
         if (!result.HasValue)
         {
@@ -547,7 +595,7 @@ public sealed class Ultimate : IPrediction
         }
 
         // === Calculate Adaptive Margin ===
-        double adaptiveMargin = CalculateCircularAdaptiveMargin(targetSpeed, input.Skillshot.Delay, effectiveRadius);
+        double adaptiveMargin = CalculateCircularAdaptiveMargin(effectiveRadius);
 
         // === Solve Behind-Target Circular Intercept ===
         var result = InterceptSolver.SolveCircularBehindTarget(
@@ -603,24 +651,30 @@ public sealed class Ultimate : IPrediction
     /// Circular spells have different considerations than linear ones:
     /// - Only delay matters (no flight time)
     /// - Larger effective radius typically
+    /// 
+    /// For circular spells, aiming at the exact trailing edge (Epsilon margin)
+    /// is risky because the target is moving away from the spell center.
+    /// A grazing hit might miss if the target moves even slightly further.
+    /// 
+    /// Instead, we aim halfway between the center and the trailing edge.
+    /// This maintains the "behind target" strategy (catching stops/reversals)
+    /// while ensuring a solid hit on moving targets.
     /// </summary>
-    private static double CalculateCircularAdaptiveMargin(
-        double targetSpeed,
-        double castDelay,
-        double effectiveRadius)
+    /// <param name="effectiveRadius">Combined collision radius (spell radius + target hitbox)</param>
+    /// <returns>Margin in game units, guaranteed to be less than effectiveRadius</returns>
+    private static double CalculateCircularAdaptiveMargin(double effectiveRadius)
     {
-        // For very small effective radii, scale proportionally
-        if (effectiveRadius < 1.0)
-            return effectiveRadius * 0.5;
+        // Handle degenerate case
+        if (effectiveRadius <= Constants.Epsilon)
+            return 0;
 
-        // For circular spells, aiming at the exact trailing edge (Epsilon margin)
-        // is risky because the target is moving away from the spell center.
-        // A grazing hit might miss if the target moves even slightly further.
-        //
-        // Instead, we aim halfway between the center and the trailing edge.
-        // This maintains the "behind target" strategy (catching stops/reversals)
-        // while ensuring a solid hit on moving targets.
-        return effectiveRadius * 0.5;
+        // For circular spells, use 50% of effective radius as margin.
+        // This places the target halfway between spell center and edge,
+        // providing a balance between the "behind target" strategy and hit reliability.
+        double margin = effectiveRadius * 0.5;
+
+        // Defensive clamp: margin must be strictly less than effectiveRadius
+        return Math.Min(margin, effectiveRadius - Constants.Epsilon);
     }
 
     /// <summary>
@@ -643,6 +697,202 @@ public sealed class Ultimate : IPrediction
             PredictedTargetPosition: input.TargetPosition,
             InterceptTime: input.Skillshot.Delay,
             Confidence: 1.0);
+    }
+
+    #endregion
+
+    #region Multi-Target Priority Selection
+
+    /// <summary>
+    /// Evaluates multiple targets and returns them ranked by hit probability.
+    /// 
+    /// This method is useful for team fights or scenarios with multiple potential targets.
+    /// It considers:
+    /// - Prediction confidence (hit probability)
+    /// - Target priority weight (optional, for focusing high-value targets)
+    /// - Range efficiency (closer targets preferred when confidence is similar)
+    /// 
+    /// Example usage:
+    /// <code>
+    /// var targets = new[] { enemyAdc, enemySupport, enemyMid };
+    /// var ranked = ultimate.RankTargets(casterPos, skillshot, targets);
+    /// var bestTarget = ranked.FirstOrDefault(t => t.Result is PredictionResult.Hit);
+    /// </code>
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="skillshot">The skillshot to evaluate</param>
+    /// <param name="targets">Array of potential targets with their movement data</param>
+    /// <returns>Targets ranked by priority score (highest first)</returns>
+    public IReadOnlyList<RankedTarget> RankTargets(
+        Point2D casterPosition,
+        LinearSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets)
+    {
+        if (targets.IsEmpty)
+            return Array.Empty<RankedTarget>();
+
+        var results = new List<RankedTarget>(targets.Length);
+
+        foreach (var target in targets)
+        {
+            var input = new PredictionInput(
+                casterPosition,
+                target.Position,
+                target.Velocity,
+                skillshot,
+                target.HitboxRadius,
+                target.Path);
+
+            var result = Predict(input);
+            double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
+
+            results.Add(new RankedTarget(target, result, priorityScore));
+        }
+
+        // Sort by priority score descending (highest priority first)
+        results.Sort((a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
+
+        return results;
+    }
+
+    /// <summary>
+    /// Evaluates multiple targets for a circular skillshot and returns them ranked by hit probability.
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="skillshot">The circular skillshot to evaluate</param>
+    /// <param name="targets">Array of potential targets with their movement data</param>
+    /// <returns>Targets ranked by priority score (highest first)</returns>
+    public IReadOnlyList<RankedTarget> RankTargetsCircular(
+        Point2D casterPosition,
+        CircularSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets)
+    {
+        if (targets.IsEmpty)
+            return Array.Empty<RankedTarget>();
+
+        var results = new List<RankedTarget>(targets.Length);
+
+        foreach (var target in targets)
+        {
+            var input = new CircularPredictionInput(
+                casterPosition,
+                target.Position,
+                target.Velocity,
+                skillshot,
+                target.HitboxRadius,
+                target.Path);
+
+            var result = PredictCircular(input);
+            double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
+
+            results.Add(new RankedTarget(target, result, priorityScore));
+        }
+
+        // Sort by priority score descending (highest priority first)
+        results.Sort((a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
+
+        return results;
+    }
+
+    /// <summary>
+    /// Gets the single best target from a collection of candidates.
+    /// Returns null if no hittable targets exist.
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="skillshot">The skillshot to evaluate</param>
+    /// <param name="targets">Array of potential targets</param>
+    /// <returns>The best target to aim for, or null if none are hittable</returns>
+    public RankedTarget? GetBestTarget(
+        Point2D casterPosition,
+        LinearSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets)
+    {
+        var ranked = RankTargets(casterPosition, skillshot, targets);
+
+        // Return first hittable target (already sorted by priority)
+        foreach (var target in ranked)
+        {
+            if (target.Result is PredictionResult.Hit)
+                return target;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the single best target for a circular skillshot.
+    /// Returns null if no hittable targets exist.
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="skillshot">The circular skillshot to evaluate</param>
+    /// <param name="targets">Array of potential targets</param>
+    /// <returns>The best target to aim for, or null if none are hittable</returns>
+    public RankedTarget? GetBestTargetCircular(
+        Point2D casterPosition,
+        CircularSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets)
+    {
+        var ranked = RankTargetsCircular(casterPosition, skillshot, targets);
+
+        // Return first hittable target (already sorted by priority)
+        foreach (var target in ranked)
+        {
+            if (target.Result is PredictionResult.Hit)
+                return target;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Calculates priority score for ranking targets.
+    /// 
+    /// Score components:
+    /// - Confidence (0-1): Base hit probability
+    /// - Priority weight (0-∞): User-defined target importance (e.g., ADC = 2.0, Tank = 0.5)
+    /// - Range efficiency (0-1): Bonus for closer targets (reduces risk of interception)
+    /// 
+    /// Formula: Score = Confidence * PriorityWeight * (0.8 + 0.2 * RangeEfficiency)
+    /// 
+    /// The range efficiency contributes only 20% to allow priority and confidence to dominate,
+    /// but still prefers closer targets when other factors are equal.
+    /// </summary>
+    private static double CalculatePriorityScore(
+        PredictionResult result,
+        double priorityWeight,
+        Point2D casterPosition,
+        double skillshotRange)
+    {
+        if (result is not PredictionResult.Hit hit)
+        {
+            // Non-hittable targets get score based on how close they are to being hittable
+            if (result is PredictionResult.OutOfRange outOfRange)
+            {
+                // Small negative score based on how far out of range
+                double overRange = outOfRange.Distance - outOfRange.MaxRange;
+                return -overRange / skillshotRange;
+            }
+
+            // Unreachable targets get lowest priority
+            return -1000;
+        }
+
+        // === Base Score: Confidence ===
+        double score = hit.Confidence;
+
+        // === Apply Priority Weight ===
+        // Default weight is 1.0, higher values = more important target
+        score *= Math.Max(0.1, priorityWeight);
+
+        // === Range Efficiency Bonus ===
+        // Closer targets are preferred (less travel time = less chance of missing)
+        double distance = (hit.CastPosition - casterPosition).Length;
+        double rangeEfficiency = 1.0 - Math.Clamp(distance / skillshotRange, 0, 1);
+
+        // Range efficiency contributes 20% to final score
+        score *= 0.8 + 0.2 * rangeEfficiency;
+
+        return score;
     }
 
     #endregion

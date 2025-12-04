@@ -49,6 +49,14 @@ public static class Constants
     /// </summary>
     public const double TrailingEdgeMargin = 1.0;
 
+    /// <summary>
+    /// Threshold for "small radius" in adaptive margin calculations.
+    /// Below this, margin scales proportionally (50% of radius).
+    /// Above this, margin is fixed at TrailingEdgeMargin.
+    /// Chosen so that at exactly this threshold, both formulas yield the same value (1.0).
+    /// </summary>
+    public const double SmallRadiusThreshold = 2.0;
+
     // === Performance & Sanity Thresholds (Game Data) ===
 
     /// <summary>
@@ -64,6 +72,27 @@ public static class Constants
     /// This is game data representing physical limits.
     /// </summary>
     public const double MaxReasonableSkillshotSpeed = 5000.0;
+
+    // === Reaction Time Constants (Game Research Data) ===
+
+    /// <summary>
+    /// Average human visual reaction time in seconds.
+    /// Based on research: average is 250ms, competitive gamers 180-220ms.
+    /// This is game research data representing human performance.
+    /// </summary>
+    public const double AverageReactionTime = 0.25;
+
+    /// <summary>
+    /// Minimum possible human reaction time (elite performance) in seconds.
+    /// Professional esports players can achieve 150-180ms in optimal conditions.
+    /// </summary>
+    public const double MinReactionTime = 0.15;
+
+    /// <summary>
+    /// Maximum reasonable reaction time in seconds.
+    /// Beyond this, target is considered to have fully reacted to any visible threat.
+    /// </summary>
+    public const double MaxReactionTime = 0.5;
 
     // === Helper Methods ===
 
@@ -88,4 +117,33 @@ public static class Constants
     /// </summary>
     public static double GetTickMovement(double targetSpeed)
         => targetSpeed * TickDuration;
+
+    /// <summary>
+    /// Calculate reaction time factor for confidence adjustment.
+    /// Shorter flight times than reaction time = higher hit probability.
+    /// 
+    /// Formula: factor = clamp(1 - (flightTime - reactionTime) / reactionTime, 0.5, 1.0)
+    /// 
+    /// - Flight time ≤ reaction time: factor = 1.0 (target can't react)
+    /// - Flight time = 2x reaction time: factor = 0.5 (target has time to dodge)
+    /// - Flight time ≥ 2x reaction time: factor = 0.5 (minimum confidence)
+    /// </summary>
+    /// <param name="flightTime">Time from launch to impact (excludes cast delay)</param>
+    /// <param name="reactionTime">Assumed reaction time (default: average)</param>
+    /// <returns>Factor between 0.5 and 1.0</returns>
+    public static double GetReactionTimeFactor(double flightTime, double reactionTime = AverageReactionTime)
+    {
+        if (reactionTime < Epsilon)
+            return 1.0;
+
+        // If flight time is less than reaction time, target can't react
+        if (flightTime <= reactionTime)
+            return 1.0;
+
+        // Linear decay from 1.0 to 0.5 as flight time increases
+        double excessTime = flightTime - reactionTime;
+        double factor = 1.0 - excessTime / reactionTime * 0.5;
+
+        return Math.Max(0.5, factor);
+    }
 }

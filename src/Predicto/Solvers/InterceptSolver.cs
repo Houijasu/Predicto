@@ -293,6 +293,9 @@ public sealed class InterceptSolver
 
     /// <summary>
     /// Solves linear case for edge collision.
+    /// Uses strict inequality (t > minTime) for consistency with other solvers.
+    /// At t == minTime, the projectile has just launched with zero travel distance,
+    /// which is only valid if target is already within collision radius (handled separately).
     /// </summary>
     private static double? SolveLinearEdge(double b, double c, double minTime, double maxTime)
     {
@@ -300,7 +303,7 @@ public sealed class InterceptSolver
             return null;
 
         double t = -c / b;
-        return t >= minTime && t <= maxTime ? t : null;
+        return t > minTime && t <= maxTime ? t : null;
     }
 
     /// <summary>
@@ -422,7 +425,7 @@ public sealed class InterceptSolver
     /// <param name="castDelay">Delay before skillshot launches</param>
     /// <param name="effectiveRadius">Combined collision radius</param>
     /// <param name="maxTime">Maximum valid time to search</param>
-    /// <param name="tolerance">Convergence tolerance (default 1e-9 for high precision)</param>
+    /// <param name="tolerance">Convergence tolerance (default Constants.Epsilon = 1e-9 for high precision)</param>
     /// <param name="maxIterations">Maximum iterations (default 100)</param>
     /// <returns>Interception time, or null if no solution exists in bracket</returns>
     public static double? SolveBisection(
@@ -723,7 +726,7 @@ public sealed class InterceptSolver
             double tMid = (tLow + tHigh) / 2;
             double fMid = EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
 
-            if (Math.Abs(fMid) < 1e-9 || (tHigh - tLow) / 2 < 1e-9)
+            if (Math.Abs(fMid) < Constants.Epsilon || (tHigh - tLow) / 2 < Constants.Epsilon)
                 return tMid;
 
             if (fMid < 0)
@@ -1011,7 +1014,7 @@ public sealed class InterceptSolver
         }
 
         // Bisection to find the behind-edge point
-        const double tolerance = 1e-9;
+        const double tolerance = Constants.Epsilon;
         const int maxIterations = 100;
 
         for (int i = 0; i < maxIterations; i++)
@@ -1135,7 +1138,7 @@ public sealed class InterceptSolver
                     (fLow, fHigh) = (fHigh, fLow);
                 }
 
-                const double tolerance = 1e-9;
+                const double tolerance = Constants.Epsilon;
                 for (int i = 0; i < 50; i++)
                 {
                     double tMid = (tLow + tHigh) / 2;
@@ -1770,6 +1773,183 @@ public sealed class InterceptSolver
         return (aimPoint, predictedTargetPos, t);
     }
 
+    /// <summary>
+    /// Solves for the optimal effectiveRadius using bisection method.
+    /// 
+    /// Algorithm:
+    /// 1. Start with effectiveRadius = targetHitboxRadius + skillshotWidth/2 (standard collision)
+    /// 2. Use bisection on the width portion [0, skillshotWidth/2]
+    /// 3. Find the minimum effectiveRadius that still results in a hit
+    /// 
+    /// Example: hitbox=60, width=40
+    /// - Standard: effectiveRadius = 60 + 20 = 80
+    /// - Bisect between 60 (min) and 80 (max) to find optimal
+    /// </summary>
+    /// <param name="casterPosition">Position where the skillshot originates</param>
+    /// <param name="targetPosition">Current position of the target</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="skillshotSpeed">Speed of the skillshot (units/second)</param>
+    /// <param name="castDelay">Delay before skillshot launches (seconds)</param>
+    /// <param name="targetHitboxRadius">Radius of the target's hitbox</param>
+    /// <param name="skillshotWidth">Width of the skillshot</param>
+    /// <param name="skillshotRange">Maximum range of the skillshot</param>
+    /// <param name="behindMargin">Safety margin behind target (default 1.0)</param>
+    /// <param name="radiusTolerance">Convergence tolerance for radius bisection (default 0.5)</param>
+    /// <param name="maxIterations">Maximum bisection iterations (default 20)</param>
+    /// <returns>Aim point, predicted target position, intercept time, and optimal effectiveRadius; or null if unreachable</returns>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)? 
+        SolveBehindTargetWithRadiusBisection(
+            Point2D casterPosition,
+            Point2D targetPosition,
+            Vector2D targetVelocity,
+            double skillshotSpeed,
+            double castDelay,
+            double targetHitboxRadius,
+            double skillshotWidth,
+            double skillshotRange,
+            double behindMargin = 1.0,
+            double radiusTolerance = 0.5,
+            int maxIterations = 20)
+    {
+        // Input validation
+        ValidateInputs(skillshotSpeed, castDelay, skillshotRange);
+        ValidateCollisionInputs(targetHitboxRadius, skillshotWidth);
+        if (behindMargin < 0)
+            throw new ArgumentException($"Behind margin cannot be negative, got {behindMargin}", nameof(behindMargin));
+
+        // For stationary targets, use simple edge intercept
+        if (targetVelocity.Length < Constants.MinVelocity)
+        {
+            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
+            double? stationaryTime = SolveEdgeInterceptTime(
+                casterPosition, targetPosition, targetVelocity, skillshotSpeed,
+                castDelay, targetHitboxRadius, skillshotWidth, skillshotRange);
+
+            if (!stationaryTime.HasValue)
+                return null;
+
+            return (targetPosition, targetPosition, stationaryTime.Value, effectiveRadius);
+        }
+
+        // Bisection bounds for the width multiplier [0, 1]
+        // widthMultiplier = 0 → effectiveRadius = hitbox (minimum)
+        // widthMultiplier = 1 → effectiveRadius = hitbox + width (maximum)
+        double lowMultiplier = 0.0;
+        double highMultiplier = 1.0;
+        
+        // Track the best successful hit
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)? bestHit = null;
+
+        // First, check if maximum radius hits (if not, target is unreachable)
+        var maxRadiusResult = TrySolveWithRadius(
+            casterPosition, targetPosition, targetVelocity,
+            skillshotSpeed, castDelay, targetHitboxRadius,
+            skillshotWidth, skillshotRange, behindMargin,
+            widthMultiplier: 1.0);
+
+        if (maxRadiusResult == null)
+        {
+            // Even with maximum radius, can't hit - target unreachable
+            return null;
+        }
+
+        bestHit = maxRadiusResult;
+
+        // Bisection to find optimal radius
+        for (int i = 0; i < maxIterations; i++)
+        {
+            double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
+            double currentWidth = skillshotWidth * midMultiplier;
+            
+            // Check convergence (in actual width units)
+            if (currentWidth < radiusTolerance || (highMultiplier - lowMultiplier) * skillshotWidth < radiusTolerance)
+                break;
+
+            var result = TrySolveWithRadius(
+                casterPosition, targetPosition, targetVelocity,
+                skillshotSpeed, castDelay, targetHitboxRadius,
+                skillshotWidth, skillshotRange, behindMargin,
+                widthMultiplier: midMultiplier);
+
+            if (result != null)
+            {
+                // Hit! Try smaller radius (decrease high bound)
+                highMultiplier = midMultiplier;
+                bestHit = result;
+            }
+            else
+            {
+                // Miss! Need larger radius (increase low bound)
+                lowMultiplier = midMultiplier;
+            }
+        }
+
+        return bestHit;
+    }
+
+    /// <summary>
+    /// Helper method to attempt solving with a specific width multiplier.
+    /// </summary>
+    private static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)?
+        TrySolveWithRadius(
+            Point2D casterPosition,
+            Point2D targetPosition,
+            Vector2D targetVelocity,
+            double skillshotSpeed,
+            double castDelay,
+            double targetHitboxRadius,
+            double skillshotWidth,
+            double skillshotRange,
+            double behindMargin,
+            double widthMultiplier)
+    {
+        double adjustedWidth = skillshotWidth * widthMultiplier;
+        double effectiveRadius = targetHitboxRadius + adjustedWidth;
+
+        // Ensure margin doesn't exceed radius
+        double actualMargin = Math.Min(behindMargin, effectiveRadius - Constants.Epsilon);
+        if (actualMargin < Constants.Epsilon)
+            actualMargin = effectiveRadius * 0.5;
+
+        double behindDistance = effectiveRadius - actualMargin;
+        if (behindDistance < Constants.Epsilon)
+            behindDistance = effectiveRadius * 0.5;
+
+        Vector2D moveDirection = targetVelocity.Normalize();
+        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
+        Point2D virtualTargetPosition = targetPosition + behindOffset;
+
+        // Solve intercept
+        double? interceptTime = SolveInterceptTimeWithFullRefinement(
+            casterPosition,
+            virtualTargetPosition,
+            targetVelocity,
+            skillshotSpeed,
+            castDelay,
+            skillshotRange);
+
+        if (!interceptTime.HasValue)
+            return null;
+
+        double t = interceptTime.Value;
+
+        // Calculate positions
+        Point2D aimPoint = CalculatePredictedPosition(virtualTargetPosition, targetVelocity, t);
+        Point2D predictedTargetPos = CalculatePredictedPosition(targetPosition, targetVelocity, t);
+
+        // Verify collision actually occurs with this radius
+        double aimToTarget = (aimPoint - predictedTargetPos).Length;
+        
+        // The aim point is behindDistance behind target, so separation should be ~behindDistance
+        // A "hit" means the target center is within effectiveRadius of the aim point
+        if (aimToTarget <= effectiveRadius)
+        {
+            return (aimPoint, predictedTargetPos, t, effectiveRadius);
+        }
+
+        return null;
+    }
+
     #region Path-Based Interception
 
     /// <summary>
@@ -2041,6 +2221,168 @@ public sealed class InterceptSolver
         return TryInterceptAtFinalWaypoint(
             casterPosition, path, skillshotSpeed, castDelay,
             targetHitboxRadius, skillshotWidth, skillshotRange);
+    }
+
+    /// <summary>
+    /// Path-based version of radius bisection.
+    /// Uses bisection to find the optimal effectiveRadius for path-following targets.
+    /// </summary>
+    /// <param name="casterPosition">Position where the skillshot originates</param>
+    /// <param name="path">Target's movement path with waypoints</param>
+    /// <param name="skillshotSpeed">Speed of the skillshot (units/second)</param>
+    /// <param name="castDelay">Delay before skillshot launches (seconds)</param>
+    /// <param name="targetHitboxRadius">Radius of the target's hitbox</param>
+    /// <param name="skillshotWidth">Width of the skillshot</param>
+    /// <param name="skillshotRange">Maximum range of the skillshot</param>
+    /// <param name="behindMargin">Safety margin behind target (default 1.0)</param>
+    /// <param name="radiusTolerance">Convergence tolerance for radius bisection (default 0.5)</param>
+    /// <param name="maxIterations">Maximum bisection iterations (default 20)</param>
+    /// <returns>Intercept result with optimal effectiveRadius, or null if unreachable</returns>
+    public static (PathInterceptResult Result, double EffectiveRadius)? SolvePathBehindTargetWithRadiusBisection(
+        Point2D casterPosition,
+        TargetPath path,
+        double skillshotSpeed,
+        double castDelay,
+        double targetHitboxRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double behindMargin = 1.0,
+        double radiusTolerance = 0.5,
+        int maxIterations = 20)
+    {
+        ValidateInputs(skillshotSpeed, castDelay);
+        ValidateGeometry(targetHitboxRadius, skillshotWidth, skillshotRange);
+        if (behindMargin < 0)
+            throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
+
+        // For stationary targets, use edge intercept with max radius
+        if (path.Speed < Constants.MinVelocity)
+        {
+            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
+            var edgeResult = SolvePathEdgeIntercept(
+                casterPosition, path, skillshotSpeed, castDelay,
+                targetHitboxRadius, skillshotWidth, skillshotRange);
+            
+            if (edgeResult == null)
+                return null;
+                
+            return (edgeResult.Value, effectiveRadius);
+        }
+
+        // Bisection bounds for the width multiplier [0, 1]
+        double lowMultiplier = 0.0;
+        double highMultiplier = 1.0;
+        
+        (PathInterceptResult Result, double EffectiveRadius)? bestHit = null;
+
+        // First, check if maximum radius hits
+        var maxRadiusResult = TrySolvePathWithRadius(
+            casterPosition, path, skillshotSpeed, castDelay,
+            targetHitboxRadius, skillshotWidth, skillshotRange, behindMargin,
+            widthMultiplier: 1.0);
+
+        if (maxRadiusResult == null)
+            return null;
+
+        bestHit = maxRadiusResult;
+
+        // Bisection to find optimal radius
+        for (int i = 0; i < maxIterations; i++)
+        {
+            double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
+            double currentWidth = skillshotWidth * midMultiplier;
+            
+            if (currentWidth < radiusTolerance || (highMultiplier - lowMultiplier) * skillshotWidth < radiusTolerance)
+                break;
+
+            var result = TrySolvePathWithRadius(
+                casterPosition, path, skillshotSpeed, castDelay,
+                targetHitboxRadius, skillshotWidth, skillshotRange, behindMargin,
+                widthMultiplier: midMultiplier);
+
+            if (result != null)
+            {
+                highMultiplier = midMultiplier;
+                bestHit = result;
+            }
+            else
+            {
+                lowMultiplier = midMultiplier;
+            }
+        }
+
+        return bestHit;
+    }
+
+    /// <summary>
+    /// Helper method to attempt path-based solving with a specific width multiplier.
+    /// </summary>
+    private static (PathInterceptResult Result, double EffectiveRadius)? TrySolvePathWithRadius(
+        Point2D casterPosition,
+        TargetPath path,
+        double skillshotSpeed,
+        double castDelay,
+        double targetHitboxRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double behindMargin,
+        double widthMultiplier)
+    {
+        double adjustedWidth = skillshotWidth * widthMultiplier;
+        double effectiveRadius = targetHitboxRadius + adjustedWidth;
+
+        double maxMargin = effectiveRadius > 1.0
+            ? effectiveRadius - 1.0
+            : effectiveRadius * 0.9;
+        double actualMargin = Math.Clamp(behindMargin, Constants.Epsilon, Math.Max(Constants.Epsilon, maxMargin));
+        double behindDistance = effectiveRadius - actualMargin;
+
+        double segmentStartTime = 0;
+
+        foreach (var segment in path.EnumerateSegments())
+        {
+            double segmentLength = segment.Length;
+            if (segmentLength < Constants.Epsilon)
+                continue;
+
+            double segmentDuration = segmentLength / path.Speed;
+            double segmentEndTime = segmentStartTime + segmentDuration;
+            Vector2D segmentVelocity = segment.Direction * path.Speed;
+
+            Vector2D moveDirection = segmentVelocity.Normalize();
+            Vector2D behindOffset = moveDirection.Negate() * behindDistance;
+            Point2D virtualStart = segment.Start + behindOffset;
+
+            var interceptResult = SolveSegmentInterceptWithRefinement(
+                casterPosition,
+                virtualStart,
+                segmentVelocity,
+                skillshotSpeed,
+                castDelay,
+                skillshotRange,
+                segmentStartTime,
+                segmentEndTime);
+
+            if (interceptResult.HasValue)
+            {
+                double interceptTime = interceptResult.Value;
+                double timeOnSegment = interceptTime - segmentStartTime;
+                Point2D aimPoint = virtualStart + segmentVelocity * timeOnSegment;
+                Point2D predictedPos = path.GetPositionAtTime(interceptTime);
+
+                // Verify hit
+                double separation = (aimPoint - predictedPos).Length;
+                if (separation <= effectiveRadius)
+                {
+                    var pathResult = new PathInterceptResult(aimPoint, predictedPos, interceptTime, segment.WaypointIndex);
+                    return (pathResult, effectiveRadius);
+                }
+            }
+
+            segmentStartTime = segmentEndTime;
+        }
+
+        return null;
     }
 
     /// <summary>

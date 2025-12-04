@@ -1384,4 +1384,117 @@ public class InterceptSolverTests
     }
 
     #endregion
+
+    #region Radius Bisection Tests
+
+    [Fact]
+    public void RadiusBisection_FindsOptimalRadius()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 300); // Moving perpendicular
+        double hitbox = 60;
+        double width = 40;
+
+        var result = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1000,
+            behindMargin: 1.0);
+
+        Assert.NotNull(result);
+        var (aimPoint, predictedPos, interceptTime, effectiveRadius) = result.Value;
+
+        // Effective radius should be between hitbox and hitbox + width
+        Assert.True(effectiveRadius >= hitbox, 
+            $"EffectiveRadius ({effectiveRadius}) should be >= hitbox ({hitbox})");
+        Assert.True(effectiveRadius <= hitbox + width, 
+            $"EffectiveRadius ({effectiveRadius}) should be <= hitbox + width ({hitbox + width})");
+
+        // Verify it's actually a hit
+        double separation = (aimPoint - predictedPos).Length;
+        Assert.True(separation <= effectiveRadius,
+            $"Separation ({separation}) should be <= effectiveRadius ({effectiveRadius})");
+    }
+
+    [Fact]
+    public void RadiusBisection_StationaryTarget_UsesMaxRadius()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(0, 0); // Stationary
+        double hitbox = 60;
+        double width = 40;
+
+        var result = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1000);
+
+        Assert.NotNull(result);
+        // For stationary targets, uses standard radius (hitbox + width/2)
+        Assert.Equal(hitbox + width / 2, result.Value.EffectiveRadius, precision: 1);
+    }
+
+    [Fact]
+    public void RadiusBisection_FastTarget_FindsSmallerRadius()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        double hitbox = 60;
+        double width = 40;
+
+        // Slow target
+        var slowResult = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, new Vector2D(0, 100),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1000);
+
+        // Fast target
+        var fastResult = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, new Vector2D(0, 400),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1000);
+
+        Assert.NotNull(slowResult);
+        Assert.NotNull(fastResult);
+
+        // Both should find valid hits
+        Assert.True(slowResult.Value.EffectiveRadius >= hitbox);
+        Assert.True(fastResult.Value.EffectiveRadius >= hitbox);
+    }
+
+    [Fact]
+    public void RadiusBisection_OutOfRange_ReturnsNull()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(2000, 0); // Far beyond range
+        var targetVel = new Vector2D(500, 0); // Moving away
+        double hitbox = 60;
+        double width = 40;
+
+        var result = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1000);
+
+        Assert.Null(result);
+    }
+
+    #endregion
 }
