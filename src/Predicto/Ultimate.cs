@@ -22,10 +22,9 @@ namespace Predicto;
 /// - Psychologically much harder to react to
 /// - Projectile "catches up" from behind
 /// 
-/// Technical features - Triple Refinement for PIXEL-PERFECT accuracy:
-/// 1. Quadratic formula - O(1) initial estimate
-/// 2. Secant Method - Fast superlinear refinement to ~1e-12
-/// 3. Bisection - Guaranteed convergence to ~1e-15 (sub-pixel precision)
+/// Technical features - Behind-target trailing-edge aiming:
+/// - Aim point is computed as a behind-offset of predicted target movement
+/// - Uses closed-form quadratic interception (no iterative refinement required)
 /// 
 /// Performance optimizations:
 /// - Early exit for obvious misses (out of range + moving away)
@@ -236,14 +235,10 @@ public sealed class Ultimate : IPrediction
         // Use half of spell width as base margin for more reliable hits
         double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
 
-        // === Solve BEHIND-TARGET Interception (Always Max Accuracy) ===
-        // For the "just behind-back pixel" strategy we prioritize precision over speed.
-        //
-        // Full Triple Refinement (pixel-perfect precision):
-        // 1. Quadratic formula for O(1) initial estimate
-        // 2. Newton Method refinement (fast local convergence)
-        // 3. 3-stage bisection for guaranteed sub-pixel convergence
-        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = InterceptSolver.SolveBehindTargetWithFullRefinement(
+        // === Solve BEHIND-TARGET Interception (Direct Closed-Form) ===
+        // We aim slightly inside the target's trailing edge (behind their movement).
+        // The behind-point moves linearly, so interception uses a quadratic solve.
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = InterceptSolver.SolveBehindTargetDirect(
             input.CasterPosition,
             input.TargetPosition,
             input.TargetVelocity,
@@ -252,9 +247,7 @@ public sealed class Ultimate : IPrediction
             input.TargetHitboxRadius,
             input.Skillshot.Width,
             input.Skillshot.Range,
-            behindMargin: adaptiveMargin,
-            secantTolerance: 1e-12,
-            bisectionTolerance: 1e-15);
+            behindMargin: adaptiveMargin);
 
         if (!result.HasValue)
         {

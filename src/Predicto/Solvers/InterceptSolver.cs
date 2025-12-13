@@ -1982,6 +1982,132 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
+    /// Solves for behind-target intercept using direct closed-form quadratic.
+    /// 
+    /// This method computes the aim point directly without intermediate virtual target
+    /// abstraction, potentially offering better performance while maintaining accuracy.
+    /// 
+    /// Mathematical basis:
+    /// The "behind point" B(t) = Target(t) - r*V̂ where r is the behind distance and V̂ is unit velocity.
+    /// Since B(t) = (T - r*V̂) + V*t, this is a linearly moving point.
+    /// 
+    /// The intercept equation |B(t) - C| = s*(t - d) expands to:
+    ///   a*t² + b*t + c = 0
+    /// where:
+    ///   D = (T - r*V̂) - C  (displacement from caster to initial behind-point)
+    ///   a = |V|² - s²
+    ///   b = 2*(D·V + s²*d)
+    ///   c = |D|² - s²*d²
+    /// </summary>
+    /// <param name="casterPosition">Position where the skillshot originates</param>
+    /// <param name="targetPosition">Current position of the target</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="skillshotSpeed">Speed of the skillshot (units/second)</param>
+    /// <param name="castDelay">Delay before skillshot launches (seconds)</param>
+    /// <param name="targetHitboxRadius">Radius of the target's hitbox</param>
+    /// <param name="skillshotWidth">Width of the skillshot</param>
+    /// <param name="skillshotRange">Maximum range of the skillshot</param>
+    /// <param name="behindMargin">Safety margin behind target (default 1.0 = 1 pixel inside trailing edge)</param>
+    /// <returns>Aim point, predicted target position, and intercept time; or null if unreachable</returns>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveBehindTargetDirect(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double targetHitboxRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double behindMargin = 1.0)
+    {
+        // Input validation
+        ValidateInputs(skillshotSpeed, castDelay, skillshotRange);
+        ValidateCollisionInputs(targetHitboxRadius, skillshotWidth);
+        if (behindMargin < 0)
+            throw new ArgumentException($"Behind margin cannot be negative, got {behindMargin}", nameof(behindMargin));
+
+        double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
+
+        // For stationary targets, there's no "behind" direction - aim at center
+        if (targetVelocity.Length < Constants.MinVelocity)
+        {
+            double? stationaryTime = SolveEdgeInterceptTime(
+                casterPosition, targetPosition, targetVelocity, skillshotSpeed,
+                castDelay, targetHitboxRadius, skillshotWidth, skillshotRange);
+
+            if (!stationaryTime.HasValue)
+                return null;
+
+            return (targetPosition, targetPosition, stationaryTime.Value);
+        }
+
+        // Calculate behind distance and initial behind-point position
+        double behindDistance = effectiveRadius - behindMargin;
+        if (behindDistance < Constants.Epsilon)
+        {
+            behindDistance = effectiveRadius * 0.5;
+        }
+
+        Vector2D velocityUnit = targetVelocity.Normalize();
+        
+        // Behind-point initial position: target position offset backwards along velocity
+        // B₀ = T - r*V̂
+        Point2D behindPointInitial = targetPosition + velocityUnit.Negate() * behindDistance;
+
+        // Displacement from caster to initial behind-point
+        var displacement = behindPointInitial - casterPosition;
+        var D = new Vector2D(displacement.X, displacement.Y);
+        var V = targetVelocity;
+        double s = skillshotSpeed;
+        double d = castDelay;
+
+        // Calculate max valid time based on range
+        double maxTime = d + skillshotRange / s;
+
+        // Quadratic coefficients: a*t² + b*t + c = 0
+        double a = V.DotProduct(V) - s * s;
+        double b = 2 * D.DotProduct(V) + 2 * s * s * d;
+        double c = D.DotProduct(D) - s * s * d * d;
+
+        double? interceptTime;
+
+        // Handle degenerate case when |V| ≈ s (linear equation)
+        if (Math.Abs(a) < Constants.Epsilon)
+        {
+            interceptTime = SolveLinear(b, c, d, maxTime);
+        }
+        else
+        {
+            // Use MathNet.Numerics for robust quadratic root finding
+            var (r1, r2) = FindRoots.Quadratic(c, b, a);
+
+            // Extract real roots
+            double? t1 = r1.IsReal() ? r1.Real : null;
+            double? t2 = r2.IsReal() ? r2.Real : null;
+
+            interceptTime = SelectSmallestValidTime(t1, t2, d, maxTime);
+        }
+
+        if (!interceptTime.HasValue)
+            return null;
+
+        double t = interceptTime.Value;
+
+        // Calculate aim point (where the behind-point will be at time t)
+        Point2D aimPoint = CalculatePredictedPosition(behindPointInitial, targetVelocity, t);
+        
+        // Calculate predicted target position
+        Point2D predictedTargetPos = CalculatePredictedPosition(targetPosition, targetVelocity, t);
+
+        // Final range check on actual flight distance
+        double flightDistance = (aimPoint - casterPosition).Length;
+        if (flightDistance > skillshotRange)
+            return null;
+
+        return (aimPoint, predictedTargetPos, t);
+    }
+
+    /// <summary>
     /// Solves for the optimal effectiveRadius using bisection method.
     /// 
     /// Algorithm:

@@ -7,9 +7,59 @@ using Predicto.Models;
 using Predicto.Solvers;
 using Raylib_cs;
 
+static bool TryGetArg(string[] args, string key, out string value)
+{
+    for (int i = 0; i < args.Length - 1; i++)
+    {
+        if (string.Equals(args[i], key, StringComparison.OrdinalIgnoreCase))
+        {
+            value = args[i + 1];
+            return true;
+        }
+    }
+
+    value = string.Empty;
+    return false;
+}
+
+static bool TryGetArgDouble(string[] args, string key, out double value)
+{
+    if (TryGetArg(args, key, out string raw)
+        && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+    {
+        return true;
+    }
+
+    value = default;
+    return false;
+}
+
+static double GetBenchWidth(string[] args, double defaultWidth)
+{
+    if (TryGetArgDouble(args, "--bench-width", out double width))
+        return width;
+
+    if (TryGetArgDouble(args, "--bench-width-mult", out double mult))
+        return defaultWidth * mult;
+
+    return defaultWidth;
+}
+
 if (args.Contains("--bench", StringComparer.OrdinalIgnoreCase))
 {
-    RunBench();
+    const double defaultBenchWidth = 70.0;
+    const double defaultTargetHitboxRadius = 65.0;
+    const double defaultMargin = 1.0;
+
+    double benchWidth = GetBenchWidth(args, defaultBenchWidth);
+    double targetHitboxRadius = TryGetArgDouble(args, "--bench-hitbox", out double hitbox)
+        ? hitbox
+        : defaultTargetHitboxRadius;
+    double margin = TryGetArgDouble(args, "--bench-margin", out double m)
+        ? m
+        : defaultMargin;
+
+    RunBench(targetHitboxRadius, benchWidth, margin);
     return;
 }
 
@@ -19,7 +69,7 @@ const int ScreenHeight = 1000;
 Raylib.InitWindow(ScreenWidth, ScreenHeight, "Predicto - Ultimate Behind-Edge Prediction");
 Raylib.SetTargetFPS(60);
 
-static void RunBench()
+static void RunBench(double targetHitboxRadius, double skillshotWidth, double margin)
 {
     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
@@ -148,6 +198,194 @@ static void RunBench()
         double nsPerOp = (ms * 1_000_000.0) / iters;
         Console.WriteLine($"{label,-16}  {ms,10:F2} ms  {nsPerOp,10:F1} ns/op  found={found,7}  avg|res|={avgAbsResidual:F6}");
     }
+    
+    // ========================================
+    // BEHIND-TARGET METHOD COMPARISON
+    // ========================================
+    Console.WriteLine();
+    Console.WriteLine("=== Behind-Target Method Comparison ===");
+    
+    // Extended scenarios with hitbox and skillshot width for behind-target methods
+    // Controlled via CLI args: --bench-width, --bench-width-mult, --bench-hitbox, --bench-margin
+    
+    // Warmup for behind-target methods
+    for (int i = 0; i < warmupIterations; i++)
+    {
+        var s = scenarios[i % scenarios.Length];
+        var result1 = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, 
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        if (result1.HasValue) sink += result1.Value.InterceptTime;
+        
+        var result2 = InterceptSolver.SolveBehindTargetDirect(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, 
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        if (result2.HasValue) sink += result2.Value.InterceptTime;
+    }
+    
+    // Measure FullRefinement method
+    var swFullRef = Stopwatch.StartNew();
+    int fullRefFound = 0;
+    double fullRefResidualSum = 0;
+    for (int i = 0; i < measureIterations; i++)
+    {
+        var s = scenarios[i % scenarios.Length];
+        var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        if (result.HasValue)
+        {
+            fullRefFound++;
+            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2 - margin;
+            var aimToTarget = result.Value.PredictedTargetPosition - result.Value.AimPoint;
+            fullRefResidualSum += Math.Abs(aimToTarget.Length - effectiveRadius);
+        }
+    }
+    swFullRef.Stop();
+    double fullRefMs = swFullRef.Elapsed.TotalMilliseconds;
+    double fullRefAvgResidual = fullRefFound > 0 ? fullRefResidualSum / fullRefFound : double.NaN;
+    
+    // Measure Direct method
+    var swDirect = Stopwatch.StartNew();
+    int directFound = 0;
+    double directResidualSum = 0;
+    for (int i = 0; i < measureIterations; i++)
+    {
+        var s = scenarios[i % scenarios.Length];
+        var result = InterceptSolver.SolveBehindTargetDirect(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        if (result.HasValue)
+        {
+            directFound++;
+            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2 - margin;
+            var aimToTarget = result.Value.PredictedTargetPosition - result.Value.AimPoint;
+            directResidualSum += Math.Abs(aimToTarget.Length - effectiveRadius);
+        }
+    }
+    swDirect.Stop();
+    double directMs = swDirect.Elapsed.TotalMilliseconds;
+    double directAvgResidual = directFound > 0 ? directResidualSum / directFound : double.NaN;
+    
+    Console.WriteLine($"Scenarios: {scenarioCount}, iterations: {measureIterations}");
+    Console.WriteLine($"Target hitbox: {targetHitboxRadius}, Skillshot width: {skillshotWidth}, Margin: {margin}");
+    Console.WriteLine($"Args: --bench-width {skillshotWidth} (or --bench-width-mult X)");
+    Console.WriteLine();
+    
+    double fullRefNsPerOp = (fullRefMs * 1_000_000.0) / measureIterations;
+    double directNsPerOp = (directMs * 1_000_000.0) / measureIterations;
+    
+    Console.WriteLine($"{"FullRefinement",-18}  {fullRefMs,10:F2} ms  {fullRefNsPerOp,10:F1} ns/op  found={fullRefFound,7}  avg|res|={fullRefAvgResidual:F9}");
+    Console.WriteLine($"{"Direct",-18}  {directMs,10:F2} ms  {directNsPerOp,10:F1} ns/op  found={directFound,7}  avg|res|={directAvgResidual:F9}");
+    
+    Console.WriteLine();
+    
+    // Compare speed
+    if (directMs < fullRefMs)
+    {
+        double speedup = fullRefMs / directMs;
+        double fasterPct = (fullRefMs - directMs) / fullRefMs * 100.0;
+        Console.WriteLine($"Direct vs FullRefinement: {speedup:F3}x ({fasterPct:F2}% faster)");
+    }
+    else
+    {
+        double slowdown = directMs / fullRefMs;
+        double slowerPct = (directMs - fullRefMs) / fullRefMs * 100.0;
+        Console.WriteLine($"Direct vs FullRefinement: {slowdown:F3}x ({slowerPct:F2}% slower)");
+    }
+    
+    // Compare accuracy
+    Console.WriteLine($"Accuracy comparison: FullRefinement avg residual = {fullRefAvgResidual:F12}, Direct avg residual = {directAvgResidual:F12}");
+    if (directAvgResidual < fullRefAvgResidual)
+        Console.WriteLine($"  -> Direct is more accurate");
+    else if (fullRefAvgResidual < directAvgResidual)
+        Console.WriteLine($"  -> FullRefinement is more accurate");
+    else
+        Console.WriteLine($"  -> Both methods have same accuracy");
+    
+    // ========================================
+    // HIT SIMULATION TEST
+    // ========================================
+    Console.WriteLine();
+    Console.WriteLine("=== Hit Simulation Test (validates actual collision) ===");
+    
+    int fullRefHits = 0, fullRefMisses = 0;
+    int directHits = 0, directMisses = 0;
+    double effectiveCollisionRadius = targetHitboxRadius + skillshotWidth / 2;
+    
+    // Track max difference between methods
+    double maxTimeDiff = 0;
+    double maxAimDiff = 0;
+    
+    for (int i = 0; i < scenarios.Length; i++)
+    {
+        var s = scenarios[i];
+        
+        // Test FullRefinement method
+        var fullRefResult = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        
+        if (fullRefResult.HasValue)
+        {
+            double t = fullRefResult.Value.InterceptTime;
+            var predictedTarget = s.Target + s.Vel * t;
+            var aimDir = (fullRefResult.Value.AimPoint - s.Caster);
+            var aimDirNorm = aimDir / aimDir.Length;
+            double flightTime = Math.Max(0, t - s.Delay);
+            var skillshotPos = s.Caster + aimDirNorm * s.Speed * flightTime;
+            double dist = (skillshotPos - predictedTarget).Length;
+            if (dist <= effectiveCollisionRadius)
+                fullRefHits++;
+            else
+                fullRefMisses++;
+        }
+        
+        // Test Direct method
+        var directResult = InterceptSolver.SolveBehindTargetDirect(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
+            targetHitboxRadius, skillshotWidth, s.Range, margin);
+        
+        if (directResult.HasValue)
+        {
+            double t = directResult.Value.InterceptTime;
+            var predictedTarget = s.Target + s.Vel * t;
+            var aimDir = (directResult.Value.AimPoint - s.Caster);
+            var aimDirNorm = aimDir / aimDir.Length;
+            double flightTime = Math.Max(0, t - s.Delay);
+            var skillshotPos = s.Caster + aimDirNorm * s.Speed * flightTime;
+            double dist = (skillshotPos - predictedTarget).Length;
+            if (dist <= effectiveCollisionRadius)
+                directHits++;
+            else
+            {
+                directMisses++;
+                if (directMisses <= 5)
+                {
+                    Console.WriteLine($"  Direct MISS #{directMisses}: dist={dist:F2}, needed<={effectiveCollisionRadius:F2}, gap={dist - effectiveCollisionRadius:F2}");
+                    Console.WriteLine($"    Caster=({s.Caster.X:F1},{s.Caster.Y:F1}) Target=({s.Target.X:F1},{s.Target.Y:F1}) Vel=({s.Vel.X:F1},{s.Vel.Y:F1})");
+                }
+            }
+        }
+        
+        // Compare results when both methods succeed
+        if (fullRefResult.HasValue && directResult.HasValue)
+        {
+            double timeDiff = Math.Abs(fullRefResult.Value.InterceptTime - directResult.Value.InterceptTime);
+            double aimDiff = (fullRefResult.Value.AimPoint - directResult.Value.AimPoint).Length;
+            maxTimeDiff = Math.Max(maxTimeDiff, timeDiff);
+            maxAimDiff = Math.Max(maxAimDiff, aimDiff);
+        }
+    }
+    
+    Console.WriteLine($"FullRefinement: {fullRefHits} hits, {fullRefMisses} misses out of {fullRefHits + fullRefMisses} attempts ({100.0 * fullRefHits / (fullRefHits + fullRefMisses):F2}% hit rate)");
+    Console.WriteLine($"Direct:         {directHits} hits, {directMisses} misses out of {directHits + directMisses} attempts ({100.0 * directHits / (directHits + directMisses):F2}% hit rate)");
+    Console.WriteLine();
+    Console.WriteLine($"Max difference between methods: time={maxTimeDiff:E3}s, aim={maxAimDiff:E3} units");
+    
+    // Prevent dead-code elimination
+    if (sink == double.MaxValue)
+        Console.WriteLine("impossible sink");
 }
 
 // Load Liberation Sans font (clean, readable)
@@ -687,7 +925,10 @@ while (!Raylib.WindowShouldClose())
             fireTime = 0f;
             skillshotLaunched = false;
             fireTargetStartPos = targetPos;
+            
+            // Use the prediction's behind-target aim position directly
             fireAimPos = new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y);
+            
             skillshotDir = Vector2.Normalize(fireAimPos - casterPos);
             skillshotPos = casterPos;
             skillshotTrail.Clear();
@@ -829,6 +1070,7 @@ while (!Raylib.WindowShouldClose())
                     hitResultTimer = 1f;
                     missCount++;
                     targetPos = animTargetPos;
+
 
                     if (continuousFiring)
                     {

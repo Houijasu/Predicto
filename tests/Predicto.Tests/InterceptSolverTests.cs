@@ -184,7 +184,64 @@ public class InterceptSolverTests
 
     #endregion
 
+    #region Behind-Target Solver Equivalence Tests
+
+    [Fact]
+    public void BehindTarget_Direct_MatchesFullRefinement_RandomizedScenarios()
+    {
+        const double hitbox = 65.0;
+        const double width = 70.0;
+        const double range = 2000.0;
+        const double margin = 1.0;
+
+        var rng = new Random(1337);
+
+        for (int i = 0; i < 512; i++)
+        {
+            var caster = new Point2D(rng.NextDouble() * 2000 - 1000, rng.NextDouble() * 2000 - 1000);
+            var target = new Point2D(rng.NextDouble() * 2000 - 1000, rng.NextDouble() * 2000 - 1000);
+
+            double targetSpeed = 50 + rng.NextDouble() * 650;
+            double theta = rng.NextDouble() * Math.PI * 2;
+            var velocity = new Vector2D(Math.Cos(theta) * targetSpeed, Math.Sin(theta) * targetSpeed);
+
+            double skillshotSpeed = 800 + rng.NextDouble() * 2600;
+            double delay = rng.NextDouble() * 0.75;
+
+            var full = InterceptSolver.SolveBehindTargetWithFullRefinement(
+                caster, target, velocity,
+                skillshotSpeed, delay,
+                hitbox, width,
+                range,
+                behindMargin: margin);
+
+            var direct = InterceptSolver.SolveBehindTargetDirect(
+                caster, target, velocity,
+                skillshotSpeed, delay,
+                hitbox, width,
+                range,
+                behindMargin: margin);
+
+            Assert.Equal(full.HasValue, direct.HasValue);
+
+            if (!full.HasValue)
+                continue;
+
+            var a = full!.Value;
+            var b = direct!.Value;
+
+            Assert.Equal(a.InterceptTime, b.InterceptTime, precision: 12);
+            Assert.Equal(a.AimPoint.X, b.AimPoint.X, precision: 9);
+            Assert.Equal(a.AimPoint.Y, b.AimPoint.Y, precision: 9);
+            Assert.Equal(a.PredictedTargetPosition.X, b.PredictedTargetPosition.X, precision: 9);
+            Assert.Equal(a.PredictedTargetPosition.Y, b.PredictedTargetPosition.Y, precision: 9);
+        }
+    }
+
+    #endregion
+ 
     #region Solver Unit Tests
+
 
     [Fact]
     public void Solver_StationaryTarget_ReturnsTime()
