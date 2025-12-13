@@ -94,6 +94,16 @@ public static class Constants
     /// </summary>
     public const double MaxReactionTime = 0.5;
 
+    // === Path-End Blending Constants ===
+
+    /// <summary>
+    /// Time threshold (in seconds) for blending from behind-target to center aim.
+    /// When the target's remaining path time minus estimated intercept time is less than
+    /// this threshold, we start blending toward center aim for faster interception.
+    /// At exactly 0 seconds remaining, we aim at center (fastest intercept).
+    /// </summary>
+    public const double PathEndBlendThreshold = 0.5;
+
     // === Helper Methods ===
 
     /// <summary>
@@ -145,5 +155,25 @@ public static class Constants
         double factor = 1.0 - excessTime / reactionTime * 0.5;
 
         return Math.Max(0.5, factor);
+    }
+
+    /// <summary>
+    /// Hermite interpolation (smoothstep) for smooth transitions.
+    /// Returns 0 when x ≤ edge0, 1 when x ≥ edge1, and smoothly interpolates between.
+    /// The result has zero first derivative at both edges (C1 continuous).
+    /// 
+    /// Formula: t² * (3 - 2t) where t = clamp((x - edge0) / (edge1 - edge0), 0, 1)
+    /// </summary>
+    /// <param name="edge0">Lower edge of the transition</param>
+    /// <param name="edge1">Upper edge of the transition</param>
+    /// <param name="x">Input value</param>
+    /// <returns>Smoothly interpolated value between 0 and 1</returns>
+    public static double Smoothstep(double edge0, double edge1, double x)
+    {
+        if (Math.Abs(edge1 - edge0) < Epsilon)
+            return x < edge0 ? 0.0 : 1.0;
+
+        double t = Math.Clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
     }
 }

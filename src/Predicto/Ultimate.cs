@@ -58,6 +58,30 @@ public sealed class Ultimate : IPrediction
     }
 
     /// <summary>
+    /// Prediction using pure trailing-edge aiming (no path-end blending).
+    /// This always aims behind the target, regardless of path position.
+    /// Used for visualization comparison with the blended prediction.
+    /// </summary>
+    public PredictionResult PredictPureTrailingEdge(PredictionInput input)
+    {
+        // === Input Validation ===
+        if (input.Skillshot.Speed <= Constants.Epsilon)
+            return new PredictionResult.Unreachable("Skillshot speed must be positive");
+
+        if (input.Skillshot.Range <= Constants.Epsilon)
+            return new PredictionResult.Unreachable("Skillshot range must be positive");
+
+        // === Use Path-Based Prediction if Available ===
+        if (input.HasPath)
+        {
+            return PredictWithPathPureTrailingEdge(input);
+        }
+
+        // === Velocity-Based Prediction (same as regular - no blending needed) ===
+        return PredictWithVelocity(input);
+    }
+
+    /// <summary>
     /// Path-based prediction for multi-waypoint target movement.
     /// Iterates through path segments to find optimal interception point.
     /// </summary>
@@ -99,8 +123,17 @@ public sealed class Ultimate : IPrediction
             return PredictStationary(input, distance, effectiveRadius);
         }
 
-        // === Calculate Adaptive Margin ===
+        // === Calculate Adaptive Margin with Path-End Blending ===
         double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+
+        // Calculate path-end blend factor to smoothly transition to center aim
+        // when target is near the end of their movement path
+        double remainingPathTime = path.GetRemainingPathTime();
+        double estimatedInterceptTime = distance / input.Skillshot.Speed + input.Skillshot.Delay;
+        double blendFactor = CalculatePathEndBlendFactor(remainingPathTime, estimatedInterceptTime);
+
+        // Blend margin: behind-target when far from path end, center when near path end
+        double blendedMargin = BlendMarginForPathEnd(adaptiveMargin, effectiveRadius, blendFactor);
 
         // === Solve Path-Based BEHIND-TARGET Interception ===
         var result = InterceptSolver.SolvePathBehindTargetIntercept(
@@ -111,7 +144,7 @@ public sealed class Ultimate : IPrediction
             input.TargetHitboxRadius,
             input.Skillshot.Width,
             input.Skillshot.Range,
-            behindMargin: adaptiveMargin);
+            behindMargin: blendedMargin);
 
         if (!result.HasValue)
         {
@@ -153,7 +186,7 @@ public sealed class Ultimate : IPrediction
         // === Confidence Penalty for Segment Distance ===
         // Even on the current segment, predictions far along the path are less reliable
         // Calculate how far along the path the intercept occurs
-        double remainingPathTime = path.GetRemainingPathTime();
+        // Note: remainingPathTime was calculated earlier for path-end blending
         if (remainingPathTime > Constants.Epsilon)
         {
             // Clamp segmentProgress to [0, 1] to prevent negative penalties
@@ -161,6 +194,113 @@ public sealed class Ultimate : IPrediction
             double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
             // Apply mild penalty for predictions deep into the path (linear decay)
             // At 100% path progress: 0.5x confidence, at 50%: 0.75x
+            double segmentPenalty = 1 - 0.5 * segmentProgress;
+            confidence *= segmentPenalty;
+        }
+
+        return new PredictionResult.Hit(
+            CastPosition: interceptResult.AimPoint,
+            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
+            InterceptTime: interceptResult.InterceptTime,
+            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
+    }
+
+    /// <summary>
+    /// Path-based prediction with pure trailing-edge aiming (no path-end blending).
+    /// Always uses the full adaptive margin for behind-target aiming.
+    /// </summary>
+    private PredictionResult PredictWithPathPureTrailingEdge(PredictionInput input)
+    {
+        var path = input.TargetPath!;
+
+        // === Velocity Sanity Checks ===
+        if (path.Speed > Constants.MaxReasonableVelocity)
+            return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
+
+        if (input.Skillshot.Speed > Constants.MaxReasonableSkillshotSpeed)
+            return new PredictionResult.Unreachable("Skillshot speed exceeds reasonable bounds");
+
+        // === Geometry Setup (cache commonly used values) ===
+        var currentVelocity = path.GetCurrentVelocity();
+        var displacement = path.CurrentPosition - input.CasterPosition;
+        double distance = displacement.Length;
+        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+
+        // === Early Out: Target clearly out of range and moving away ===
+        if (distance > input.Skillshot.Range + effectiveRadius)
+        {
+            double dotProduct = displacement.DotProduct(currentVelocity);
+            if (dotProduct > 0) // Moving away
+            {
+                double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
+                var futurePosition = path.GetPositionAtTime(maxReachTime);
+                double futureDistance = (futurePosition - input.CasterPosition).Length;
+
+                if (futureDistance > input.Skillshot.Range + effectiveRadius)
+                    return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
+            }
+        }
+
+        // === Stationary Target ===
+        if (path.Speed < Constants.MinVelocity)
+        {
+            return PredictStationary(input, distance, effectiveRadius);
+        }
+
+        // === Calculate Adaptive Margin (NO blending - pure trailing edge) ===
+        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+
+        // === Solve Path-Based BEHIND-TARGET Interception ===
+        var result = InterceptSolver.SolvePathBehindTargetIntercept(
+            input.CasterPosition,
+            path,
+            input.Skillshot.Speed,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Width,
+            input.Skillshot.Range,
+            behindMargin: adaptiveMargin);  // Use full margin, no blending
+
+        if (!result.HasValue)
+        {
+            return new PredictionResult.Unreachable("No valid interception solution exists along target path");
+        }
+
+        var interceptResult = result.Value;
+
+        // === Range Validation ===
+        double flightTime = Math.Max(0, interceptResult.InterceptTime - input.Skillshot.Delay);
+        double travelDistance = input.Skillshot.Speed * flightTime;
+
+        if (travelDistance > input.Skillshot.Range + Constants.RangeTolerance)
+        {
+            return new PredictionResult.OutOfRange(travelDistance, input.Skillshot.Range);
+        }
+
+        // === Calculate Confidence ===
+        double remainingPathTime = path.GetRemainingPathTime();
+        double confidence = CalculateEnhancedConfidence(
+            interceptResult.InterceptTime,
+            distance,
+            path.Speed,
+            input.Skillshot.Speed,
+            input.Skillshot.Range,
+            input.Skillshot.Delay,
+            displacement,
+            currentVelocity);
+
+        // === Confidence Penalty for Late Waypoints ===
+        if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
+        {
+            int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
+            double waypointPenalty = Math.Pow(0.5, waypointDelta);
+            confidence *= waypointPenalty;
+        }
+
+        // === Confidence Penalty for Segment Distance ===
+        if (remainingPathTime > Constants.Epsilon)
+        {
+            double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
             double segmentPenalty = 1 - 0.5 * segmentProgress;
             confidence *= segmentPenalty;
         }
@@ -365,6 +505,57 @@ public sealed class Ultimate : IPrediction
         // Defensive clamp: margin must be strictly less than effectiveRadius
         // This ensures the aim point is always inside the collision zone
         return Math.Min(margin, effectiveRadius - Constants.Epsilon);
+    }
+
+    /// <summary>
+    /// Calculates the blend factor for transitioning from behind-target aim to center aim
+    /// as the target approaches the end of their path.
+    /// 
+    /// Returns 0.0 when target has plenty of path remaining (use behind-target).
+    /// Returns 1.0 when target is at or past path end (use center/fastest).
+    /// Uses smoothstep for C1 continuous transition.
+    /// </summary>
+    /// <param name="remainingPathTime">Time until target reaches end of path</param>
+    /// <param name="estimatedInterceptTime">Estimated time when skillshot would hit</param>
+    /// <returns>Blend factor from 0 (behind) to 1 (center)</returns>
+    private static double CalculatePathEndBlendFactor(double remainingPathTime, double estimatedInterceptTime)
+    {
+        // Time buffer = how much path time remains after intercept
+        double timeBuffer = remainingPathTime - estimatedInterceptTime;
+
+        // If intercept happens after path ends, use center aim (target will be stopped)
+        if (timeBuffer <= 0)
+            return 1.0;
+
+        // If plenty of time remaining, use full behind-target
+        if (timeBuffer >= Constants.PathEndBlendThreshold)
+            return 0.0;
+
+        // Smooth transition: as timeBuffer goes from threshold to 0, blend goes from 0 to 1
+        // Smoothstep(0, threshold, timeBuffer) gives 0 at timeBuffer=0, 1 at timeBuffer=threshold
+        // We want the inverse: 1 at timeBuffer=0, 0 at timeBuffer=threshold
+        return 1.0 - Constants.Smoothstep(0, Constants.PathEndBlendThreshold, timeBuffer);
+    }
+
+    /// <summary>
+    /// Calculates a blended margin that transitions from behind-target to center aim
+    /// based on how close the target is to the end of their path.
+    /// 
+    /// When blendFactor = 0: returns adaptiveMargin (behind-target aim)
+    /// When blendFactor = 1: returns effectiveRadius - epsilon (center aim, fastest intercept)
+    /// </summary>
+    /// <param name="adaptiveMargin">The margin for behind-target aiming</param>
+    /// <param name="effectiveRadius">The collision radius (target hitbox + skillshot width/2)</param>
+    /// <param name="blendFactor">Blend factor from 0 (behind) to 1 (center)</param>
+    /// <returns>Blended margin value</returns>
+    private static double BlendMarginForPathEnd(double adaptiveMargin, double effectiveRadius, double blendFactor)
+    {
+        // Center aim means margin ≈ effectiveRadius (aim at target center)
+        // Behind aim means margin = adaptiveMargin (aim at trailing edge)
+        double centerMargin = effectiveRadius - Constants.Epsilon;
+
+        // Linear interpolation between margins
+        return adaptiveMargin + (centerMargin - adaptiveMargin) * blendFactor;
     }
 
     /// <summary>

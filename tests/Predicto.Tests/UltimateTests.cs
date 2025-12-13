@@ -732,4 +732,167 @@ public class UltimateTests
     }
 
     #endregion
+
+    #region Path-End Blending Tests
+
+    /// <summary>
+    /// When target has a long path remaining, aim should be behind-target (trailing edge).
+    /// </summary>
+    [Fact]
+    public void PathEndBlending_LongPathRemaining_AimsBehindTarget()
+    {
+        var casterPos = new Point2D(0, 0);
+        // Target moving right with a long path remaining (2000 units at 400 speed = 5 seconds)
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(2400, 0),
+            speed: 400);
+
+        var input = PredictionInput.WithPath(
+            casterPos,
+            path,
+            new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        // Aim point should be BEHIND (less X) than predicted target position
+        // since target is moving right (positive X)
+        Assert.True(hit.CastPosition.X < hit.PredictedTargetPosition.X,
+            $"Aim ({hit.CastPosition.X:F1}) should be behind target ({hit.PredictedTargetPosition.X:F1}) for long path");
+    }
+
+    /// <summary>
+    /// When target is at the end of their path (about to stop), aim should converge to center.
+    /// </summary>
+    [Fact]
+    public void PathEndBlending_AtPathEnd_AimsAtCenter()
+    {
+        var casterPos = new Point2D(0, 0);
+        // Target moving right but almost at destination (50 units at 400 speed = 0.125 seconds)
+        // This is well within the PathEndBlendThreshold of 0.5 seconds
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(450, 0), // Only 50 units remaining
+            speed: 400);
+
+        var input = PredictionInput.WithPath(
+            casterPos,
+            path,
+            new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        // Aim point should be close to predicted target position (center aim)
+        double aimOffset = hit.PredictedTargetPosition.X - hit.CastPosition.X;
+        double effectiveRadius = 65 + 35; // hitbox + width/2
+
+        // At path end, aim offset should be small (close to center, not full behind)
+        Assert.True(aimOffset < effectiveRadius * 0.3,
+            $"At path end, aim offset ({aimOffset:F1}) should be small (< {effectiveRadius * 0.3:F1})");
+    }
+
+    /// <summary>
+    /// Smooth blending: mid-path should have intermediate aim between behind and center.
+    /// </summary>
+    [Fact]
+    public void PathEndBlending_MidPath_SmoothTransition()
+    {
+        var casterPos = new Point2D(0, 0);
+
+        // Create three scenarios with different remaining path times
+        var paths = new[]
+        {
+            // Long path (5 seconds) - should be full behind
+            TargetPath.FromDestination(new Point2D(400, 0), new Point2D(2400, 0), speed: 400),
+            // Medium path (0.5 seconds = threshold) - should be blended
+            TargetPath.FromDestination(new Point2D(400, 0), new Point2D(600, 0), speed: 400),
+            // Short path (0.1 seconds) - should be near center
+            TargetPath.FromDestination(new Point2D(400, 0), new Point2D(440, 0), speed: 400),
+        };
+
+        var offsets = new double[3];
+        for (int i = 0; i < 3; i++)
+        {
+            var input = PredictionInput.WithPath(
+                casterPos,
+                paths[i],
+                new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+                targetHitboxRadius: 65);
+
+            var result = _prediction.Predict(input);
+            Assert.IsType<PredictionResult.Hit>(result);
+            var hit = (PredictionResult.Hit)result;
+
+            offsets[i] = hit.PredictedTargetPosition.X - hit.CastPosition.X;
+        }
+
+        // Offsets should decrease as path gets shorter (more center-focused)
+        // Long path should have largest offset (most behind)
+        // Short path should have smallest offset (most center)
+        Assert.True(offsets[0] >= offsets[1],
+            $"Long path offset ({offsets[0]:F1}) should be >= medium path ({offsets[1]:F1})");
+        Assert.True(offsets[1] >= offsets[2],
+            $"Medium path offset ({offsets[1]:F1}) should be >= short path ({offsets[2]:F1})");
+    }
+
+    /// <summary>
+    /// Smoothstep helper should produce C1-continuous transitions.
+    /// </summary>
+    [Fact]
+    public void Smoothstep_ProducesCorrectValues()
+    {
+        // Test boundary conditions
+        Assert.Equal(0.0, Constants.Smoothstep(0, 1, -0.5), precision: 10);
+        Assert.Equal(0.0, Constants.Smoothstep(0, 1, 0), precision: 10);
+        Assert.Equal(1.0, Constants.Smoothstep(0, 1, 1), precision: 10);
+        Assert.Equal(1.0, Constants.Smoothstep(0, 1, 1.5), precision: 10);
+
+        // Test midpoint (should be exactly 0.5)
+        Assert.Equal(0.5, Constants.Smoothstep(0, 1, 0.5), precision: 10);
+
+        // Test that it's monotonically increasing
+        double prev = 0;
+        for (double x = 0; x <= 1; x += 0.1)
+        {
+            double value = Constants.Smoothstep(0, 1, x);
+            Assert.True(value >= prev, $"Smoothstep should be monotonic at x={x}");
+            prev = value;
+        }
+    }
+
+    /// <summary>
+    /// Path-end blending should not affect velocity-based predictions (no path = no blending).
+    /// </summary>
+    [Fact]
+    public void PathEndBlending_VelocityBased_UnchangedBehavior()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(400, 0);
+        var targetVel = new Vector2D(400, 0); // Moving right at 400 speed
+
+        var input = new PredictionInput(
+            CasterPosition: casterPos,
+            TargetPosition: targetPos,
+            TargetVelocity: targetVel,
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        // Velocity-based should still use behind-target (trailing edge)
+        Assert.True(hit.CastPosition.X < hit.PredictedTargetPosition.X,
+            $"Velocity-based aim ({hit.CastPosition.X:F1}) should be behind target ({hit.PredictedTargetPosition.X:F1})");
+    }
+
+    #endregion
 }

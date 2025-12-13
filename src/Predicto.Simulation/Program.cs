@@ -456,6 +456,7 @@ float pathTotalTime = 0f;  // Total time elapsed on path during continuous firin
 
 // Prediction result
 PredictionResult? ultimateResult = null;
+PredictionResult? trailingEdgeResult = null;  // Pure trailing-edge prediction for comparison
 
 // Collision info for display
 Vector2 collisionPos = Vector2.Zero;
@@ -649,6 +650,7 @@ while (!Raylib.WindowShouldClose())
         }
 
         ultimateResult = ultimate.PredictCircular(circularInput);
+        trailingEdgeResult = ultimateResult;  // Circular doesn't have blending yet, same result
     }
     else
     {
@@ -720,6 +722,7 @@ while (!Raylib.WindowShouldClose())
         }
 
         ultimateResult = ultimate.Predict(input);
+        trailingEdgeResult = ultimate.PredictPureTrailingEdge(input);
     }
 
     // Stop continuous firing with Escape
@@ -1118,7 +1121,20 @@ while (!Raylib.WindowShouldClose())
     // Draw prediction visualization
     if (!isFiring)
     {
-        // Ultimate prediction (gold)
+        // First draw trailing edge prediction (blue) - so it appears behind
+        // Only show in linear mode with path (where blending is active)
+        if (trailingEdgeResult is PredictionResult.Hit trailingHit && !isCircularMode && pathModeActive)
+        {
+            var trailingAim = new Vector2((float)trailingHit.CastPosition.X, (float)trailingHit.CastPosition.Y);
+            
+            // Blue trailing edge aim point - smaller radius to not overlap with green
+            Raylib.DrawCircleV(trailingAim, 6, new Color(80, 140, 255, 200));
+            Raylib.DrawCircleLinesV(trailingAim, 8, new Color(100, 180, 255, 255));
+            // Line from target to trailing aim
+            Raylib.DrawLineEx(targetPos, trailingAim, 1.5f, new Color(80, 140, 255, 150));
+        }
+
+        // Then draw current prediction (green) - on top
         if (ultimateResult is PredictionResult.Hit ultimateHit2)
         {
             var ultimateAim = new Vector2((float)ultimateHit2.CastPosition.X, (float)ultimateHit2.CastPosition.Y);
@@ -1140,13 +1156,14 @@ while (!Raylib.WindowShouldClose())
             }
             else
             {
-                // Linear skillshot preview
-                DrawSkillshotPreview(casterPos, ultimateAim, skillshotWidth, new Color(255, 215, 0, 40));
-                Raylib.DrawCircleV(ultimatePredicted, targetHitbox * 0.3f, new Color(255, 215, 0, 100));
-                Raylib.DrawCircleLinesV(ultimatePredicted, targetHitbox * 0.5f, new Color(255, 215, 0, 200));
-                Raylib.DrawCircleV(ultimateAim, 12, new Color(255, 230, 100, 220));
+                // Linear skillshot preview - green for blended prediction
+                DrawSkillshotPreview(casterPos, ultimateAim, skillshotWidth, new Color(80, 200, 80, 40));
+                Raylib.DrawCircleV(ultimatePredicted, targetHitbox * 0.3f, new Color(80, 255, 80, 100));
+                Raylib.DrawCircleLinesV(ultimatePredicted, targetHitbox * 0.5f, new Color(80, 255, 80, 200));
+                // Green aim point
+                Raylib.DrawCircleV(ultimateAim, 12, new Color(80, 255, 120, 220));
                 Raylib.DrawCircleLinesV(ultimateAim, 14, Color.White);
-                Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(255, 215, 0, 150));
+                Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(80, 255, 80, 150));
             }
         }
     }
@@ -1633,4 +1650,21 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     Raylib.DrawTextEx(font, "TAB : Cycle presets  |  ` : Toggle mode", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
     ctrlY += lineHeight;
     Raylib.DrawTextEx(font, "Q/W : Target speed  |  E/R : Projectile speed", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
+
+    // Prediction legend (only show for linear mode with path)
+    if (!isCircularMode && pathModeActive)
+    {
+        int legendY = ctrlY + 40;
+        Raylib.DrawRectangle(10, legendY, 260, 60, new Color(0, 0, 0, 200));
+        Raylib.DrawRectangleLines(10, legendY, 260, 60, new Color(80, 80, 100, 255));
+        
+        Raylib.DrawTextEx(font, "PREDICTION LEGEND", new Vector2(20, legendY + 8), fontSize, spacing, Color.White);
+        legendY += 26;
+        // Green circle and text
+        Raylib.DrawCircleV(new Vector2(30, legendY + 8), 6, new Color(80, 255, 120, 220));
+        Raylib.DrawTextEx(font, "Blended (path-aware)", new Vector2(45, legendY), smallFont, spacing, new Color(80, 255, 120, 255));
+        // Blue circle and text
+        Raylib.DrawCircleV(new Vector2(160, legendY + 8), 5, new Color(80, 140, 255, 220));
+        Raylib.DrawTextEx(font, "Trailing", new Vector2(175, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
+    }
 }
