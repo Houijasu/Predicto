@@ -1,4 +1,5 @@
 using MathNet.Numerics;
+using MathNet.Numerics.RootFinding;
 using MathNet.Spatial.Euclidean;
 using Predicto.Models;
 
@@ -411,12 +412,14 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
-    /// Solves for interception time using the bisection method.
+    /// Solves for interception time using MathNet.Numerics Bisection.
     /// Finds root of f(t) = |D + V·t| - (s·(t-d) + r) = 0.
     /// 
     /// The bisection method is guaranteed to converge if a root exists in the bracket.
     /// It's more robust than quadratic solving for edge cases and can handle
     /// scenarios where numerical instability affects the quadratic formula.
+    /// 
+    /// Uses MathNet.Numerics.RootFinding.Bisection for robust, well-tested implementation.
     /// </summary>
     /// <param name="casterPosition">Position of the caster</param>
     /// <param name="targetPosition">Current position of the target</param>
@@ -447,41 +450,20 @@ public sealed class InterceptSolver
 
         // Evaluate function at bracket endpoints
         double fLow = EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tLow);
-        double fHigh = EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tHigh);
 
         // Check if target is already in collision range at launch
         if (fLow <= 0)
             return tLow;
 
-        // No sign change means no root in interval (target unreachable)
-        if (fLow * fHigh > 0)
-            return null;
+        // Use MathNet's Bisection.TryFindRoot for robust root finding
+        Func<double, double> f = t => EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
 
-        // Bisection iterations
-        for (int i = 0; i < maxIterations; i++)
+        if (Bisection.TryFindRoot(f, tLow, tHigh, tolerance, maxIterations, out double root))
         {
-            double tMid = (tLow + tHigh) / 2;
-            double fMid = EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
-
-            // Check convergence
-            if (Math.Abs(fMid) < tolerance || (tHigh - tLow) / 2 < tolerance)
-                return tMid;
-
-            // Narrow the bracket
-            if (fLow * fMid < 0)
-            {
-                tHigh = tMid;
-                // fHigh = fMid; // Not needed, we use fLow for sign check
-            }
-            else
-            {
-                tLow = tMid;
-                fLow = fMid;
-            }
+            return root;
         }
 
-        // Return best estimate after max iterations
-        return (tLow + tHigh) / 2;
+        return null;
     }
 
     /// <summary>
@@ -563,7 +545,7 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
-    /// Bisection solver with pre-computed bracket and function values.
+    /// Bisection solver with pre-computed bracket using MathNet.Numerics.
     /// Used for refinement when bracket is already known.
     /// </summary>
     private static double? SolveBisectionInBracket(
@@ -578,25 +560,16 @@ public sealed class InterceptSolver
         double tolerance,
         int maxIterations)
     {
-        for (int i = 0; i < maxIterations; i++)
+        // Define the collision function
+        Func<double, double> f = t => EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
+
+        // Use MathNet's Bisection.TryFindRoot
+        if (Bisection.TryFindRoot(f, tLow, tHigh, tolerance, maxIterations, out double root))
         {
-            double tMid = (tLow + tHigh) / 2;
-            double fMid = EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
-
-            if (Math.Abs(fMid) < tolerance || (tHigh - tLow) / 2 < tolerance)
-                return tMid;
-
-            if (fLow * fMid < 0)
-            {
-                tHigh = tMid;
-            }
-            else
-            {
-                tLow = tMid;
-                fLow = fMid;
-            }
+            return root;
         }
 
+        // Fallback to midpoint if bisection fails
         return (tLow + tHigh) / 2;
     }
 
@@ -692,7 +665,7 @@ public sealed class InterceptSolver
 
     /// <summary>
     /// Finds when target exits the collision zone (for targets inside zone at launch).
-    /// Uses bisection to find where f(t) changes from negative to positive.
+    /// Uses MathNet Bisection to find where f(t) changes from negative to positive.
     /// </summary>
     private static double? FindCollisionExitTime(
         Vector2D displacement,
@@ -720,26 +693,19 @@ public sealed class InterceptSolver
         if (fHigh < 0)
             return maxTime;
 
-        // Bisection to find exit point
-        for (int i = 0; i < 100; i++)
+        // Use MathNet's Bisection.TryFindRoot for exit point
+        Func<double, double> f = t => EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
+
+        if (Bisection.TryFindRoot(f, tLow, tHigh, Constants.Epsilon, 100, out double root))
         {
-            double tMid = (tLow + tHigh) / 2;
-            double fMid = EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
-
-            if (Math.Abs(fMid) < Constants.Epsilon || (tHigh - tLow) / 2 < Constants.Epsilon)
-                return tMid;
-
-            if (fMid < 0)
-                tLow = tMid;
-            else
-                tHigh = tMid;
+            return root;
         }
 
         return (tLow + tHigh) / 2;
     }
 
     /// <summary>
-    /// Solves for the LATEST interception time (trailing edge) using bisection.
+    /// Solves for the LATEST interception time (trailing edge) using MathNet Bisection.
     /// Finds the second root where f(t) transitions from negative back to positive.
     /// </summary>
     public static double? SolveBisectionTrailing(
@@ -780,31 +746,15 @@ public sealed class InterceptSolver
         if (fEnd <= 0)
             return maxTime;
 
-        // Bisection for exit point
-        double tLow = searchStart;
-        double tHigh = maxTime;
-        double fLow = fStart;
+        // Use MathNet's Bisection.TryFindRoot for exit point
+        Func<double, double> f = t => EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
 
-        for (int i = 0; i < maxIterations; i++)
+        if (Bisection.TryFindRoot(f, searchStart, maxTime, tolerance, maxIterations, out double root))
         {
-            double tMid = (tLow + tHigh) / 2;
-            double fMid = EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
-
-            if (Math.Abs(fMid) < tolerance || (tHigh - tLow) / 2 < tolerance)
-                return tMid;
-
-            if (fMid <= 0)
-            {
-                tLow = tMid;
-                fLow = fMid;
-            }
-            else
-            {
-                tHigh = tMid;
-            }
+            return root;
         }
 
-        return (tLow + tHigh) / 2;
+        return (searchStart + maxTime) / 2;
     }
 
     /// <summary>
@@ -897,24 +847,16 @@ public sealed class InterceptSolver
         double tolerance,
         int maxIterations)
     {
-        for (int i = 0; i < maxIterations; i++)
+        // Define the collision function
+        Func<double, double> f = t => EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
+
+        // Use MathNet's Bisection.TryFindRoot
+        if (Bisection.TryFindRoot(f, tLow, tHigh, tolerance, maxIterations, out double root))
         {
-            double tMid = (tLow + tHigh) / 2;
-            double fMid = EvaluateCollisionFunction(displacement, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, tMid);
-
-            if (Math.Abs(fMid) < tolerance || (tHigh - tLow) / 2 < tolerance)
-                return tMid;
-
-            if (fMid <= 0)
-            {
-                tLow = tMid;
-            }
-            else
-            {
-                tHigh = tMid;
-            }
+            return root;
         }
 
+        // Fallback to midpoint if bisection fails
         return (tLow + tHigh) / 2;
     }
 
@@ -1353,12 +1295,13 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
-    /// Refines an initial time estimate using Newton's Method.
+    /// Refines an initial time estimate using MathNet.Numerics NewtonRaphson.
     /// 
     /// Newton update:
     ///   t_{n+1} = t_n - f(t_n) / f'(t_n)
     /// 
     /// This converges quadratically near the root when the derivative is well-behaved.
+    /// Uses MathNet.Numerics.RootFinding.NewtonRaphson for robust, well-tested implementation.
     /// </summary>
     private static double RefineWithNewton(
         Vector2D displacement,
@@ -1372,51 +1315,22 @@ public sealed class InterceptSolver
         int maxIterations = 20)
     {
         double minTime = castDelay + Constants.Epsilon;
-        double t = Math.Clamp(initialGuess, minTime, maxTime);
+        double clampedGuess = Math.Clamp(initialGuess, minTime, maxTime);
 
-        // In refinement we always clamp t >= castDelay + Epsilon,
-        // so (t - castDelay) is strictly positive and we can skip Math.Max.
+        // Define the intercept function f(t) = |D + V*t| - s*(t - d)
+        Func<double, double> f = t => EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t);
 
-        for (int i = 0; i < maxIterations; i++)
+        // Define the derivative f'(t)
+        Func<double, double> df = t => EvaluateInterceptDerivative(displacement, targetVelocity, skillshotSpeed, castDelay, t);
+
+        // Use MathNet's NewtonRaphson.TryFindRoot with initial guess
+        if (NewtonRaphson.TryFindRoot(f, df, clampedGuess, minTime, maxTime, positionTolerance, maxIterations, out double root))
         {
-            var relativePosition = displacement + targetVelocity * t;
-            double distanceToTarget = relativePosition.Length;
-
-            double flightTime = t - castDelay;
-            double projectileDistance = skillshotSpeed * flightTime;
-
-            double f = distanceToTarget - projectileDistance;
-            if (Math.Abs(f) <= positionTolerance)
-                return t;
-
-            // d/dt |x(t)| is undefined at |x| = 0; handle safely.
-            double fp;
-            if (distanceToTarget < Constants.Epsilon)
-            {
-                fp = -skillshotSpeed;
-            }
-            else
-            {
-                double dDistanceDt = relativePosition.DotProduct(targetVelocity) / distanceToTarget;
-                fp = dDistanceDt - skillshotSpeed;
-            }
-
-            if (Math.Abs(fp) < Constants.Epsilon)
-                break;
-
-            double tNext = t - f / fp;
-            if (double.IsNaN(tNext) || double.IsInfinity(tNext))
-                break;
-
-            tNext = Math.Clamp(tNext, minTime, maxTime);
-
-            if (Math.Abs(tNext - t) <= timeTolerance)
-                return tNext;
-
-            t = tNext;
+            return root;
         }
 
-        return t;
+        // If Newton-Raphson fails, return the initial guess
+        return clampedGuess;
     }
 
     /// <summary>
@@ -1605,7 +1519,7 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
-    /// Refines a time estimate using Bisection Method for guaranteed convergence.
+    /// Refines a time estimate using MathNet.Numerics Bisection for guaranteed convergence.
     /// 
     /// Bisection is the most robust root-finding method:
     /// - GUARANTEED to converge if root exists in bracket
@@ -1613,6 +1527,7 @@ public sealed class InterceptSolver
     /// - ~50 iterations for machine precision (1e-15)
     /// 
     /// Used as final refinement step after Newton for absolute precision.
+    /// Uses MathNet.Numerics.RootFinding.Bisection for robust, well-tested implementation.
     /// </summary>
     /// <param name="displacement">Vector from caster to target at t=0</param>
     /// <param name="targetVelocity">Target's velocity vector</param>
@@ -1636,100 +1551,33 @@ public sealed class InterceptSolver
         int stages = 3,
         int maxIterationsPerStage = 60)
     {
-        double currentEstimate = Math.Clamp(estimate, castDelay + Constants.Epsilon, maxTime);
-        double bracketSize = initialBracketSize;
+        double minTime = castDelay + Constants.Epsilon;
+        double currentEstimate = Math.Clamp(estimate, minTime, maxTime);
 
+        // Define the intercept function
+        Func<double, double> f = t => EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t);
+
+        // Check if estimate is already good enough
+        if (Math.Abs(f(currentEstimate)) <= positionTolerance)
+            return currentEstimate;
+
+        // Try progressively larger brackets until we find a valid one
+        double bracketSize = initialBracketSize;
         for (int stage = 0; stage < stages; stage++)
         {
-            currentEstimate = RefineWithBisectionStage(
-                displacement,
-                targetVelocity,
-                skillshotSpeed,
-                castDelay,
-                maxTime,
-                currentEstimate,
-                bracketSize,
-                positionTolerance,
-                timeTolerance,
-                maxIterationsPerStage);
+            double tLow = Math.Clamp(currentEstimate - bracketSize, minTime, maxTime);
+            double tHigh = Math.Clamp(currentEstimate + bracketSize, minTime, maxTime);
+
+            // Use MathNet's Bisection.TryFindRoot
+            if (Bisection.TryFindRoot(f, tLow, tHigh, timeTolerance, maxIterationsPerStage, out double root))
+            {
+                currentEstimate = root;
+            }
 
             bracketSize = Math.Max(Constants.TickDuration, bracketSize * 0.5);
         }
 
         return currentEstimate;
-    }
-
-    private static double RefineWithBisectionStage(
-        Vector2D displacement,
-        Vector2D targetVelocity,
-        double skillshotSpeed,
-        double castDelay,
-        double maxTime,
-        double estimate,
-        double bracketSize,
-        double positionTolerance,
-        double timeTolerance,
-        int maxIterations)
-    {
-        double minTime = castDelay + Constants.Epsilon;
-        double tLow = Math.Clamp(estimate - bracketSize, minTime, maxTime);
-        double tHigh = Math.Clamp(estimate + bracketSize, minTime, maxTime);
-
-        double fLow = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tLow);
-        double fHigh = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tHigh);
-
-        double fEst = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, estimate);
-        if (Math.Abs(fEst) <= positionTolerance)
-            return estimate;
-
-        // Expand bracket until it brackets a root or we hit bounds.
-        if (fLow * fHigh > 0)
-        {
-            double expanded = bracketSize;
-            for (int i = 0; i < 5; i++)
-            {
-                expanded *= 2;
-                tLow = Math.Clamp(estimate - expanded, minTime, maxTime);
-                tHigh = Math.Clamp(estimate + expanded, minTime, maxTime);
-                fLow = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tLow);
-                fHigh = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tHigh);
-
-                if (fLow * fHigh <= 0)
-                    break;
-            }
-
-            if (fLow * fHigh > 0)
-                return estimate;
-        }
-
-        // Ensure fLow corresponds to negative value (before intercept)
-        if (fLow > 0)
-        {
-            (tLow, tHigh) = (tHigh, tLow);
-            (fLow, fHigh) = (fHigh, fLow);
-        }
-
-        for (int i = 0; i < maxIterations; i++)
-        {
-            double tMid = 0.5 * (tLow + tHigh);
-            double fMid = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tMid);
-
-            if (Math.Abs(fMid) <= positionTolerance || 0.5 * (tHigh - tLow) <= timeTolerance)
-                return tMid;
-
-            if (fMid < 0)
-            {
-                tLow = tMid;
-                fLow = fMid;
-            }
-            else
-            {
-                tHigh = tMid;
-                fHigh = fMid;
-            }
-        }
-
-        return 0.5 * (tLow + tHigh);
     }
 
      /// <summary>

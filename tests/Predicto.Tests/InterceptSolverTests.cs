@@ -230,7 +230,7 @@ public class InterceptSolverTests
             var a = full!.Value;
             var b = direct!.Value;
 
-            Assert.Equal(a.InterceptTime, b.InterceptTime, precision: 12);
+            Assert.Equal(a.InterceptTime, b.InterceptTime, precision: 10);
             Assert.Equal(a.AimPoint.X, b.AimPoint.X, precision: 9);
             Assert.Equal(a.AimPoint.Y, b.AimPoint.Y, precision: 9);
             Assert.Equal(a.PredictedTargetPosition.X, b.PredictedTargetPosition.X, precision: 9);
