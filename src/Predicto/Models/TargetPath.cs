@@ -9,8 +9,8 @@ namespace Predicto.Models;
 public sealed class TargetPath
 {
     /// <summary>
-    /// The waypoints defining the path. Target moves from waypoint[0] toward waypoint[1], etc.
-    /// Must contain at least 2 points.
+    /// The waypoints defining the path. Target moves from Waypoints[CurrentWaypointIndex] toward the end.
+    /// Must contain at least 1 point (destination-only paths are allowed).
     /// </summary>
     public IReadOnlyList<Point2D> Waypoints { get; }
 
@@ -33,11 +33,11 @@ public sealed class TargetPath
     /// <summary>
     /// Creates a new target path.
     /// </summary>
-    /// <param name="waypoints">The waypoints defining the path (minimum 2)</param>
+    /// <param name="waypoints">The waypoints defining the path (minimum 1)</param>
     /// <param name="currentPosition">Current position of the target</param>
     /// <param name="currentWaypointIndex">Index of waypoint target is moving toward</param>
     /// <param name="speed">Movement speed in units per second</param>
-    /// <exception cref="ArgumentException">If waypoints has fewer than 2 points or index is invalid</exception>
+    /// <exception cref="ArgumentException">If waypoints has fewer than 1 point or index is invalid</exception>
     public TargetPath(IReadOnlyList<Point2D> waypoints, Point2D currentPosition, int currentWaypointIndex, double speed)
     {
         if (waypoints == null || waypoints.Count < 1)
@@ -54,7 +54,7 @@ public sealed class TargetPath
     }
 
     /// <summary>
-    /// Creates a simple two-point path from current position toward a destination.
+    /// Creates a path from current position toward a destination.
     /// </summary>
     public static TargetPath FromDestination(Point2D currentPosition, Point2D destination, double speed)
     {

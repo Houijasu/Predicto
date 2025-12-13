@@ -1,14 +1,154 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Numerics;
 using MathNet.Spatial.Euclidean;
 using Predicto;
 using Predicto.Models;
+using Predicto.Solvers;
 using Raylib_cs;
+
+if (args.Contains("--bench", StringComparer.OrdinalIgnoreCase))
+{
+    RunBench();
+    return;
+}
 
 const int ScreenWidth = 1600;
 const int ScreenHeight = 1000;
 
 Raylib.InitWindow(ScreenWidth, ScreenHeight, "Predicto - Ultimate Behind-Edge Prediction");
 Raylib.SetTargetFPS(60);
+
+static void RunBench()
+{
+    CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+
+    const int scenarioCount = 2048;
+    const int warmupIterations = 5_000;
+    const int measureIterations = 200_000;
+
+    var rng = new Random(12345);
+    var scenarios = new (Point2D Caster, Point2D Target, Vector2D Vel, double Speed, double Delay, double Range)[scenarioCount];
+
+    for (int i = 0; i < scenarios.Length; i++)
+    {
+        double casterX = rng.NextDouble() * 2000 - 1000;
+        double casterY = rng.NextDouble() * 2000 - 1000;
+        double targetX = rng.NextDouble() * 2000 - 1000;
+        double targetY = rng.NextDouble() * 2000 - 1000;
+
+        // Target speed in typical LoL-ish units.
+        double targetSpeed = 50 + rng.NextDouble() * 650;
+        double angle = rng.NextDouble() * Math.PI * 2;
+        var vel = new Vector2D(Math.Cos(angle) * targetSpeed, Math.Sin(angle) * targetSpeed);
+
+        // Skillshot parameters.
+        double skillshotSpeed = 800 + rng.NextDouble() * 2600;
+        double castDelay = rng.NextDouble() * 0.75;
+        double skillshotRange = 800 + rng.NextDouble() * 2200;
+
+        scenarios[i] = (new Point2D(casterX, casterY), new Point2D(targetX, targetY), vel, skillshotSpeed, castDelay, skillshotRange);
+    }
+
+    // Warmup (JIT + caches)
+    double sink = 0;
+    for (int i = 0; i < warmupIterations; i++)
+    {
+        var s = scenarios[i % scenarios.Length];
+        sink += InterceptSolver.SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range) ?? 0;
+    }
+    for (int i = 0; i < warmupIterations; i++)
+    {
+        var s = scenarios[i % scenarios.Length];
+        sink += InterceptSolver.SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range) ?? 0;
+    }
+
+    var (newtonMs, newtonFound, newtonResidual) = Measure(
+        "Newton",
+        scenarios,
+        measureIterations,
+        static s => InterceptSolver.SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range));
+
+    var (secantMs, secantFound, secantResidual) = Measure(
+        "Secant (legacy)",
+        scenarios,
+        measureIterations,
+        static s => InterceptSolver.SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range));
+
+    // Prevent dead-code elimination.
+    if (sink == double.MaxValue)
+        Console.WriteLine("impossible");
+
+    Console.WriteLine();
+    Console.WriteLine("=== InterceptSolver Benchmark (quadratic + refinement) ===");
+    Console.WriteLine($"Scenarios: {scenarioCount}, iterations: {measureIterations}");
+
+    Print("Newton", newtonMs, measureIterations, newtonFound, newtonResidual);
+    Print("Secant (legacy)", secantMs, measureIterations, secantFound, secantResidual);
+
+    Console.WriteLine();
+    PrintDelta("Secant vs Newton", secantMs, newtonMs);
+    PrintDelta("Newton vs Secant", newtonMs, secantMs);
+
+    static void PrintDelta(string label, double aMs, double bMs)
+    {
+        if (bMs <= 0)
+            return;
+
+        // Example: (b - a)/b = how much faster a is than b
+        double speedup = bMs / aMs;
+        double fasterPct = (bMs - aMs) / bMs * 100.0;
+        double slowerPct = (aMs - bMs) / bMs * 100.0;
+
+        if (aMs <= bMs)
+            Console.WriteLine($"{label,-18}: {speedup:F3}x ({fasterPct:F2}% faster)");
+        else
+            Console.WriteLine($"{label,-18}: {speedup:F3}x ({slowerPct:F2}% slower)");
+    }
+
+    static (double ElapsedMs, int Found, double AvgAbsResidual) Measure(
+        string name,
+        (Point2D Caster, Point2D Target, Vector2D Vel, double Speed, double Delay, double Range)[] scenarios,
+        int iterations,
+        Func<(Point2D Caster, Point2D Target, Vector2D Vel, double Speed, double Delay, double Range), double?> solver)
+    {
+        var sw = Stopwatch.StartNew();
+        int found = 0;
+        double residualSum = 0;
+
+        for (int i = 0; i < iterations; i++)
+        {
+            var s = scenarios[i % scenarios.Length];
+            double? t = solver(s);
+            if (t.HasValue)
+            {
+                found++;
+                // Residual for center-to-center: |D + Vt| - s*max(0,t-d)
+                var displacement = s.Target - s.Caster;
+                var D = new Vector2D(displacement.X, displacement.Y);
+                var relative = D + s.Vel * t.Value;
+                double dist = relative.Length;
+                double flight = Math.Max(0, t.Value - s.Delay);
+                double proj = s.Speed * flight;
+                residualSum += Math.Abs(dist - proj);
+            }
+        }
+
+        sw.Stop();
+        double avgResidual = found > 0 ? residualSum / found : double.NaN;
+        return (sw.Elapsed.TotalMilliseconds, found, avgResidual);
+    }
+
+    static void Print(string label, double ms, int iters, int found, double avgAbsResidual)
+    {
+        double nsPerOp = (ms * 1_000_000.0) / iters;
+        Console.WriteLine($"{label,-16}  {ms,10:F2} ms  {nsPerOp,10:F1} ns/op  found={found,7}  avg|res|={avgAbsResidual:F6}");
+    }
+}
 
 // Load Liberation Sans font (clean, readable)
 var font = Raylib.LoadFontEx("/usr/share/fonts/liberation/LiberationSans-Regular.ttf", 24, null, 0);

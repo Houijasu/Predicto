@@ -387,10 +387,10 @@ public class InterceptSolverTests
 
     #endregion
 
-    #region Secant Refinement Tests
+    #region Refinement (Newton-backed) Tests
 
     [Fact]
-    public void SecantRefinement_ProducesSameResultAsQuadratic()
+    public void Refinement_ProducesSameResultAsQuadratic()
     {
         // For normal cases, Secant should produce the same result as quadratic
         var casterPos = new Point2D(0, 0);
@@ -424,7 +424,7 @@ public class InterceptSolverTests
     }
 
     [Fact]
-    public void SecantRefinement_HighPrecision_VerifyIntercept()
+    public void Refinement_HighPrecision_VerifyIntercept()
     {
         // Verify that refined solution actually produces valid intercept
         var casterPos = new Point2D(300, 400);
@@ -460,7 +460,7 @@ public class InterceptSolverTests
     }
 
     [Fact]
-    public void SecantRefinement_LargeDistance_MaintainsPrecision()
+    public void Refinement_LargeDistance_MaintainsPrecision()
     {
         // Test with large distance where numerical precision matters more
         var casterPos = new Point2D(0, 0);
@@ -489,7 +489,7 @@ public class InterceptSolverTests
     }
 
     [Fact]
-    public void SecantRefinement_WithCastDelay_CorrectTiming()
+    public void Refinement_WithCastDelay_CorrectTiming()
     {
         // Test with significant cast delay
         var casterPos = new Point2D(0, 0);
@@ -768,6 +768,33 @@ public class InterceptSolverTests
         Assert.Equal(distToTarget, projectileTraveled, precision: 12);
     }
 
+    [Fact]
+    public void FullRefinement_AdaptiveTolerance_DoesNotBreakTimingConsistency()
+    {
+        // This exercises the adaptive tolerance path (positionTol -> timeTol) via full refinement.
+        // The invariant is that interceptTime matches projectile arrival time.
+        var casterPos = new Point2D(123, 456);
+        var targetPos = new Point2D(900, 800);
+        var targetVel = new Vector2D(-250, 175);
+
+        double speed = 1600;
+        double delay = 0.35;
+
+        double? t = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: speed,
+            castDelay: delay,
+            skillshotRange: 5000);
+
+        Assert.NotNull(t);
+
+        var aimAtTime = targetPos + targetVel * t.Value;
+        double travelDist = (aimAtTime - casterPos).Length;
+        double arrivalTime = delay + travelDist / speed;
+
+        Assert.Equal(t.Value, arrivalTime, precision: 9);
+    }
+
     #endregion
 
     #region Input Validation Tests
@@ -931,7 +958,7 @@ public class InterceptSolverTests
     /// This tests the fix for the t1 clamping issue where t1 could be less than or equal to castDelay.
     /// </summary>
     [Fact]
-    public void SecantRefinement_InitialGuessNearCastDelay_DoesNotFail()
+    public void Refinement_InitialGuessNearCastDelay_DoesNotFail()
     {
         // Setup: target very close, so intercept time is barely above castDelay
         var casterPos = new Point2D(0, 0);

@@ -236,47 +236,25 @@ public sealed class Ultimate : IPrediction
         // Use half of spell width as base margin for more reliable hits
         double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
 
-        // === Determine Refinement Strategy ===
-        // Easy cases: close range, slow target, or target moving toward caster
-        bool isEasyCase = IsEasyCase(distance, targetSpeed, displacement, input.TargetVelocity, input.Skillshot.Speed);
-
-        // === Solve BEHIND-TARGET Interception ===
-        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result;
-
-        if (isEasyCase)
-        {
-            // Use Secant refinement only for easy cases (faster)
-            result = InterceptSolver.SolveBehindTargetWithSecantRefinement(
-                input.CasterPosition,
-                input.TargetPosition,
-                input.TargetVelocity,
-                input.Skillshot.Speed,
-                input.Skillshot.Delay,
-                input.TargetHitboxRadius,
-                input.Skillshot.Width,
-                input.Skillshot.Range,
-                behindMargin: adaptiveMargin,
-                tolerance: 1e-10);
-        }
-        else
-        {
-            // Full Triple Refinement for difficult cases (pixel-perfect precision)
-            // 1. Quadratic formula for O(1) initial estimate
-            // 2. Secant Method refinement for ~1e-12 precision
-            // 3. Bisection for guaranteed ~1e-15 sub-pixel precision
-            result = InterceptSolver.SolveBehindTargetWithFullRefinement(
-                input.CasterPosition,
-                input.TargetPosition,
-                input.TargetVelocity,
-                input.Skillshot.Speed,
-                input.Skillshot.Delay,
-                input.TargetHitboxRadius,
-                input.Skillshot.Width,
-                input.Skillshot.Range,
-                behindMargin: adaptiveMargin,
-                secantTolerance: 1e-12,
-                bisectionTolerance: 1e-15);
-        }
+        // === Solve BEHIND-TARGET Interception (Always Max Accuracy) ===
+        // For the "just behind-back pixel" strategy we prioritize precision over speed.
+        //
+        // Full Triple Refinement (pixel-perfect precision):
+        // 1. Quadratic formula for O(1) initial estimate
+        // 2. Newton Method refinement (fast local convergence)
+        // 3. 3-stage bisection for guaranteed sub-pixel convergence
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = InterceptSolver.SolveBehindTargetWithFullRefinement(
+            input.CasterPosition,
+            input.TargetPosition,
+            input.TargetVelocity,
+            input.Skillshot.Speed,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Width,
+            input.Skillshot.Range,
+            behindMargin: adaptiveMargin,
+            secantTolerance: 1e-12,
+            bisectionTolerance: 1e-15);
 
         if (!result.HasValue)
         {

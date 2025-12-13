@@ -336,7 +336,98 @@ public class EdgeCaseRegressionTests
     }
 
     #endregion
-
+ 
+    #region Radius Bisection Regression Tests
+ 
+    [Fact]
+    public void BehindTarget_RadiusBisection_MaxEffectiveRadius_EqualsHitboxPlusHalfWidth()
+    {
+        // Regression: radius bisection must treat width as diameter, so the max contribution is width/2.
+        // Bug: previously used hitbox + width, doubling the effective radius.
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(400, 0);
+        var targetVel = new Vector2D(250, 0);
+ 
+        double hitbox = 65;
+        double width = 70;
+ 
+        var result = InterceptSolver.SolveBehindTargetWithRadiusBisection(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1000,
+            castDelay: 0,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1200,
+            behindMargin: 1.0,
+            radiusTolerance: 0.01,
+            maxIterations: 25);
+ 
+        Assert.NotNull(result);
+        var (_, _, _, effectiveRadius) = result.Value;
+ 
+        double expectedMax = hitbox + width / 2;
+        Assert.True(effectiveRadius <= expectedMax + 1e-9,
+            $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
+    }
+ 
+    [Fact]
+    public void PathBehindTarget_RadiusBisection_MaxEffectiveRadius_EqualsHitboxPlusHalfWidth()
+    {
+        // Same regression check but for path-based solver.
+        var casterPos = new Point2D(0, 0);
+        var currentPos = new Point2D(400, 0);
+        var destination = new Point2D(1200, 0);
+        var path = TargetPath.FromDestination(currentPos, destination, speed: 250);
+ 
+        double hitbox = 65;
+        double width = 70;
+ 
+        var result = InterceptSolver.SolvePathBehindTargetWithRadiusBisection(
+            casterPos, path,
+            skillshotSpeed: 1000,
+            castDelay: 0,
+            targetHitboxRadius: hitbox,
+            skillshotWidth: width,
+            skillshotRange: 1500,
+            behindMargin: 1.0,
+            radiusTolerance: 0.01,
+            maxIterations: 25);
+ 
+        Assert.NotNull(result);
+        var (_, effectiveRadius) = result.Value;
+ 
+        double expectedMax = hitbox + width / 2;
+        Assert.True(effectiveRadius <= expectedMax + 1e-9,
+            $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
+    }
+ 
+    #endregion
+ 
+    #region TargetPath Contract Regression Tests
+ 
+    [Fact]
+    public void TargetPath_DestinationOnly_OneWaypoint_PathFunctionsAreConsistent()
+    {
+        // Contract: TargetPath allows destination-only paths (1 waypoint).
+        var currentPos = new Point2D(100, 100);
+        var destination = new Point2D(300, 100);
+        var path = TargetPath.FromDestination(currentPos, destination, speed: 200);
+ 
+        Assert.Single(path.Waypoints);
+        Assert.Equal(0, path.CurrentWaypointIndex);
+ 
+        // Basic invariants
+        Assert.Equal(currentPos, path.GetPositionAtTime(0));
+        Assert.True(path.GetVelocityAtTime(0).Length > 0);
+ 
+        // After enough time, position clamps to final waypoint and velocity becomes 0
+        double duration = (destination - currentPos).Length / 200.0;
+        Assert.Equal(destination, path.GetPositionAtTime(duration + 1.0));
+        Assert.Equal(0, path.GetVelocityAtTime(duration + 1.0).Length, precision: 12);
+    }
+ 
+    #endregion
+ 
     #region Constants.Epsilon Consistency Tests
 
     /// <summary>

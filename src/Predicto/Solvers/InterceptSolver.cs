@@ -1279,7 +1279,7 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
-    /// Evaluates the center-to-center intercept function for Secant/Newton refinement.
+    /// Evaluates the center-to-center intercept function for Newton refinement.
     /// f(t) = |D + V·t| - s·(t - d)
     /// 
     /// When f(t) = 0, the projectile center reaches the target center.
@@ -1308,102 +1308,178 @@ public sealed class InterceptSolver
         return distanceToTarget - projectileDistance;
     }
 
+    private static double GetRefinementPositionTolerance(double defaultPositionTolerance)
+    {
+        // Allow callers to pass in old hardcoded tolerances, but clamp to a reasonable minimum.
+        return Math.Max(defaultPositionTolerance, Constants.Epsilon);
+    }
+
+    private static double GetAdaptiveTimeToleranceFromSpeed(double positionTolerance, double skillshotSpeed, double fallback)
+    {
+        // Convert desired positional error (units) into a time tolerance based on projectile speed.
+        // When speed is very small (shouldn't happen due to validations), fall back to the provided tolerance.
+        if (skillshotSpeed <= Constants.Epsilon)
+            return fallback;
+
+        double timeTol = positionTolerance / skillshotSpeed;
+        return Math.Max(timeTol, fallback);
+    }
+
     /// <summary>
-    /// Refines an initial time estimate using the Secant Method.
+    /// Evaluates the derivative of the center-to-center intercept function:
+    /// f(t) = |D + V·t| - s·max(0, t - d)
     /// 
-    /// The Secant Method is a root-finding algorithm that approximates Newton-Raphson
-    /// without requiring explicit derivative calculation:
-    /// 
-    ///   t_{n+1} = t_n - f(t_n) · (t_n - t_{n-1}) / (f(t_n) - f(t_{n-1}))
-    /// 
-    /// Convergence: Superlinear (order ≈ 1.618, the golden ratio)
-    /// Typically converges in 4-8 iterations to machine precision.
-    /// 
-    /// Advantages over other methods:
-    /// - Faster than Bisection (superlinear vs linear convergence)
-    /// - Simpler than Newton-Raphson (no derivative needed)
-    /// - More robust than Fixed-Point iteration
+    /// f'(t) = ((D + V·t)·V) / |D + V·t| - (t > d ? s : 0)
     /// </summary>
-    /// <param name="displacement">Vector from caster to target at t=0</param>
-    /// <param name="targetVelocity">Target's velocity vector</param>
-    /// <param name="skillshotSpeed">Speed of the skillshot</param>
-    /// <param name="castDelay">Delay before skillshot launches</param>
-    /// <param name="initialGuess">Initial estimate (e.g., from quadratic solver)</param>
-    /// <param name="tolerance">Convergence tolerance (default 1e-12 for high precision)</param>
-    /// <param name="maxIterations">Maximum iterations (default 20)</param>
-    /// <returns>Refined intercept time, or the best estimate if max iterations reached</returns>
-    private static double RefineWithSecant(
+    private static double EvaluateInterceptDerivative(
         Vector2D displacement,
         Vector2D targetVelocity,
         double skillshotSpeed,
         double castDelay,
+        double t)
+    {
+        var relativePosition = displacement + targetVelocity * t;
+        double distanceToTarget = relativePosition.Length;
+
+        // d/dt |x(t)| is undefined at |x| = 0; handle safely.
+        if (distanceToTarget < Constants.Epsilon)
+        {
+            return t > castDelay ? -skillshotSpeed : 0;
+        }
+
+        double dDistanceDt = relativePosition.DotProduct(targetVelocity) / distanceToTarget;
+        double projectileTerm = t > castDelay ? skillshotSpeed : 0;
+        return dDistanceDt - projectileTerm;
+    }
+
+    /// <summary>
+    /// Refines an initial time estimate using Newton's Method.
+    /// 
+    /// Newton update:
+    ///   t_{n+1} = t_n - f(t_n) / f'(t_n)
+    /// 
+    /// This converges quadratically near the root when the derivative is well-behaved.
+    /// </summary>
+    private static double RefineWithNewton(
+        Vector2D displacement,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double maxTime,
         double initialGuess,
-        double tolerance = 1e-12,
+        double positionTolerance,
+        double timeTolerance,
         int maxIterations = 20)
     {
-        // Secant method needs two initial points
-        // Use initialGuess and a small perturbation
-        double t0 = initialGuess;
+        double minTime = castDelay + Constants.Epsilon;
+        double t = Math.Clamp(initialGuess, minTime, maxTime);
 
-        // Use a small step based on tick duration for the second point
-        // This avoids magic numbers like 1.001 or 1e-6
-        double step = Constants.TickDuration * 0.5;
-        double t1 = initialGuess + step;
-
-        // Ensure t1 is valid (must be > castDelay for meaningful evaluation)
-        if (t1 <= castDelay)
-            t1 = castDelay + step;
-
-        double f0 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t0);
-        double f1 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t1);
-
-        // If initial guess is already very accurate, return it
-        if (Math.Abs(f0) < tolerance)
-            return t0;
+        // In refinement we always clamp t >= castDelay + Epsilon,
+        // so (t - castDelay) is strictly positive and we can skip Math.Max.
 
         for (int i = 0; i < maxIterations; i++)
         {
-            // Avoid division by zero
-            double denominator = f1 - f0;
-            if (Math.Abs(denominator) < Constants.Epsilon)
+            var relativePosition = displacement + targetVelocity * t;
+            double distanceToTarget = relativePosition.Length;
+
+            double flightTime = t - castDelay;
+            double projectileDistance = skillshotSpeed * flightTime;
+
+            double f = distanceToTarget - projectileDistance;
+            if (Math.Abs(f) <= positionTolerance)
+                return t;
+
+            // d/dt |x(t)| is undefined at |x| = 0; handle safely.
+            double fp;
+            if (distanceToTarget < Constants.Epsilon)
+            {
+                fp = -skillshotSpeed;
+            }
+            else
+            {
+                double dDistanceDt = relativePosition.DotProduct(targetVelocity) / distanceToTarget;
+                fp = dDistanceDt - skillshotSpeed;
+            }
+
+            if (Math.Abs(fp) < Constants.Epsilon)
                 break;
 
-            // Secant formula: t_{n+1} = t_n - f(t_n) * (t_n - t_{n-1}) / (f(t_n) - f(t_{n-1}))
-            double t2 = t1 - f1 * (t1 - t0) / denominator;
+            double tNext = t - f / fp;
+            if (double.IsNaN(tNext) || double.IsInfinity(tNext))
+                break;
 
-            // Ensure t2 is valid (positive, after delay)
-            if (t2 < castDelay)
-                t2 = castDelay + Constants.Epsilon;
+            tNext = Math.Clamp(tNext, minTime, maxTime);
+
+            if (Math.Abs(tNext - t) <= timeTolerance)
+                return tNext;
+
+            t = tNext;
+        }
+
+        return t;
+    }
+
+    /// <summary>
+    /// Legacy Secant refinement kept for benchmarking Newton vs Secant.
+    /// This is intentionally not used by the production solver paths.
+    /// </summary>
+    private static double RefineWithSecantLegacy(
+        Vector2D displacement,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double maxTime,
+        double initialGuess,
+        double positionTolerance,
+        double timeTolerance,
+        int maxIterations = 20)
+    {
+        double minTime = castDelay + Constants.Epsilon;
+
+        double t0 = Math.Clamp(initialGuess, minTime, maxTime);
+        double t1 = Math.Clamp(initialGuess * 1.001 + 1e-6, minTime, maxTime);
+
+        double f0 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t0);
+        if (Math.Abs(f0) <= positionTolerance)
+            return t0;
+
+        double f1 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t1);
+
+        for (int i = 0; i < maxIterations; i++)
+        {
+            double denominator = f1 - f0;
+            if (Math.Abs(denominator) < 1e-15)
+                break;
+
+            double t2 = t1 - f1 * (t1 - t0) / denominator;
+            if (double.IsNaN(t2) || double.IsInfinity(t2))
+                break;
+
+            t2 = Math.Clamp(t2, minTime, maxTime);
 
             double f2 = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t2);
 
-            // Check convergence
-            if (Math.Abs(f2) < tolerance || Math.Abs(t2 - t1) < tolerance)
+            if (Math.Abs(f2) <= positionTolerance || Math.Abs(t2 - t1) <= timeTolerance)
                 return t2;
 
-            // Shift for next iteration
             t0 = t1;
             f0 = f1;
             t1 = t2;
             f1 = f2;
         }
 
-        // Return best estimate
         return t1;
     }
 
-    /// <summary>
-    /// Solves for center-to-center intercept time using quadratic formula
-    /// with Secant Method refinement for maximum precision.
-    /// 
-    /// Strategy:
-    /// 1. Use fast quadratic solver for O(1) initial estimate
-    /// 2. Refine with Secant Method for ~1e-12 precision
-    /// 
-    /// This hybrid approach combines:
-    /// - Speed of closed-form solution (instant initial guess)
-    /// - Precision of iterative refinement (machine-precision result)
-    /// </summary>
+     /// <summary>
+     /// Solves for center-to-center intercept time using quadratic formula
+     /// with Newton refinement for maximum precision.
+     /// 
+     /// Strategy:
+     /// 1. Use fast quadratic solver to get initial estimate
+     /// 2. Refine with Newton Method using an adaptive tolerance
+     /// </summary>
+
     public static double? SolveInterceptTimeWithSecantRefinement(
         Point2D casterPosition,
         Point2D targetPosition,
@@ -1413,7 +1489,9 @@ public sealed class InterceptSolver
         double skillshotRange = double.MaxValue,
         double tolerance = 1e-12)
     {
-        // Step 1: Get initial estimate from quadratic solver
+        // Back-compat entry point.
+        // Internally this now uses Newton refinement with an adaptive tolerance.
+
         double? initialEstimate = SolveInterceptTime(
             casterPosition,
             targetPosition,
@@ -1425,39 +1503,37 @@ public sealed class InterceptSolver
         if (!initialEstimate.HasValue)
             return null;
 
-        // Step 2: Refine with Secant Method
+        double maxTime = castDelay + skillshotRange / skillshotSpeed;
+
         var displacement = targetPosition - casterPosition;
         var D = new Vector2D(displacement.X, displacement.Y);
 
-        double refined = RefineWithSecant(
+        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
+        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
+
+        double refined = RefineWithNewton(
             D,
             targetVelocity,
             skillshotSpeed,
             castDelay,
+            maxTime,
             initialEstimate.Value,
-            tolerance);
+            positionTolerance,
+            timeTolerance);
 
-        // Validate refined result is within range
-        double maxTime = castDelay + skillshotRange / skillshotSpeed;
-        if (refined < castDelay || refined > maxTime)
-            return initialEstimate; // Fall back to quadratic if refinement went out of bounds
+        if (refined <= castDelay || refined > maxTime)
+            return initialEstimate;
 
         return refined;
     }
 
     /// <summary>
-    /// Solves for behind-target interception with Secant Method refinement.
+    /// Solves for behind-target interception with Newton refinement.
     /// 
     /// This is the highest-precision method for behind-target prediction:
     /// 1. Calculate virtual target position (offset behind real target)
     /// 2. Solve intercept using quadratic formula (O(1) initial guess)
-    /// 3. Refine with Secant Method to ~1e-12 precision
-    /// 
-    /// The Secant refinement ensures numerical accuracy even in edge cases
-    /// where the quadratic formula might have precision loss due to:
-    /// - Near-equal roots (discriminant close to zero)
-    /// - Large coefficient magnitudes
-    /// - Subtraction of similar values
+    /// 3. Refine with Newton Method using an adaptive tolerance
     /// </summary>
     public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveBehindTargetWithSecantRefinement(
         Point2D casterPosition,
@@ -1506,7 +1582,7 @@ public sealed class InterceptSolver
         // Create virtual target position: offset BEHIND the real target
         Point2D virtualTargetPosition = targetPosition + behindOffset;
 
-        // Solve intercept with Secant refinement for maximum precision
+        // Solve intercept with Newton refinement for maximum precision
         double? interceptTime = SolveInterceptTimeWithSecantRefinement(
             casterPosition,
             virtualTargetPosition,
@@ -1536,13 +1612,13 @@ public sealed class InterceptSolver
     /// - Linear convergence: each iteration halves the error
     /// - ~50 iterations for machine precision (1e-15)
     /// 
-    /// Used as final refinement step after Secant for absolute precision.
+    /// Used as final refinement step after Newton for absolute precision.
     /// </summary>
     /// <param name="displacement">Vector from caster to target at t=0</param>
     /// <param name="targetVelocity">Target's velocity vector</param>
     /// <param name="skillshotSpeed">Speed of the skillshot</param>
     /// <param name="castDelay">Delay before skillshot launches</param>
-    /// <param name="estimate">Estimate from previous refinement (Secant)</param>
+    /// <param name="estimate">Estimate from previous refinement (Newton)</param>
     /// <param name="bracketSize">Size of bracket around estimate to search</param>
     /// <param name="tolerance">Convergence tolerance (default 1e-15 for pixel precision)</param>
     /// <param name="maxIterations">Maximum iterations (default 60)</param>
@@ -1552,33 +1628,69 @@ public sealed class InterceptSolver
         Vector2D targetVelocity,
         double skillshotSpeed,
         double castDelay,
+        double maxTime,
         double estimate,
-        double bracketSize = Constants.TickDuration,
-        double tolerance = 1e-15,
-        int maxIterations = 60)
+        double initialBracketSize,
+        double positionTolerance,
+        double timeTolerance,
+        int stages = 3,
+        int maxIterationsPerStage = 60)
     {
-        // Create bracket around estimate
-        double tLow = Math.Max(castDelay, estimate - bracketSize);
-        double tHigh = estimate + bracketSize;
+        double currentEstimate = Math.Clamp(estimate, castDelay + Constants.Epsilon, maxTime);
+        double bracketSize = initialBracketSize;
+
+        for (int stage = 0; stage < stages; stage++)
+        {
+            currentEstimate = RefineWithBisectionStage(
+                displacement,
+                targetVelocity,
+                skillshotSpeed,
+                castDelay,
+                maxTime,
+                currentEstimate,
+                bracketSize,
+                positionTolerance,
+                timeTolerance,
+                maxIterationsPerStage);
+
+            bracketSize = Math.Max(Constants.TickDuration, bracketSize * 0.5);
+        }
+
+        return currentEstimate;
+    }
+
+    private static double RefineWithBisectionStage(
+        Vector2D displacement,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double maxTime,
+        double estimate,
+        double bracketSize,
+        double positionTolerance,
+        double timeTolerance,
+        int maxIterations)
+    {
+        double minTime = castDelay + Constants.Epsilon;
+        double tLow = Math.Clamp(estimate - bracketSize, minTime, maxTime);
+        double tHigh = Math.Clamp(estimate + bracketSize, minTime, maxTime);
 
         double fLow = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tLow);
         double fHigh = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tHigh);
 
-        // If estimate is already very accurate, return it
         double fEst = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, estimate);
-        if (Math.Abs(fEst) < tolerance)
+        if (Math.Abs(fEst) <= positionTolerance)
             return estimate;
 
-        // If no sign change in bracket, the estimate is likely already optimal
-        // Try to find a valid bracket by expanding
+        // Expand bracket until it brackets a root or we hit bounds.
         if (fLow * fHigh > 0)
         {
-            // Try expanding bracket
+            double expanded = bracketSize;
             for (int i = 0; i < 5; i++)
             {
-                bracketSize *= 2;
-                tLow = Math.Max(castDelay, estimate - bracketSize);
-                tHigh = estimate + bracketSize;
+                expanded *= 2;
+                tLow = Math.Clamp(estimate - expanded, minTime, maxTime);
+                tHigh = Math.Clamp(estimate + expanded, minTime, maxTime);
                 fLow = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tLow);
                 fHigh = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tHigh);
 
@@ -1586,7 +1698,6 @@ public sealed class InterceptSolver
                     break;
             }
 
-            // If still no valid bracket, return the estimate
             if (fLow * fHigh > 0)
                 return estimate;
         }
@@ -1598,17 +1709,14 @@ public sealed class InterceptSolver
             (fLow, fHigh) = (fHigh, fLow);
         }
 
-        // Bisection iterations
         for (int i = 0; i < maxIterations; i++)
         {
-            double tMid = (tLow + tHigh) / 2;
+            double tMid = 0.5 * (tLow + tHigh);
             double fMid = EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, tMid);
 
-            // Check convergence
-            if (Math.Abs(fMid) < tolerance || (tHigh - tLow) / 2 < tolerance)
+            if (Math.Abs(fMid) <= positionTolerance || 0.5 * (tHigh - tLow) <= timeTolerance)
                 return tMid;
 
-            // Narrow bracket
             if (fMid < 0)
             {
                 tLow = tMid;
@@ -1621,20 +1729,16 @@ public sealed class InterceptSolver
             }
         }
 
-        return (tLow + tHigh) / 2;
+        return 0.5 * (tLow + tHigh);
     }
 
-    /// <summary>
-    /// Solves for center-to-center intercept time using triple refinement:
-    /// 1. Quadratic formula - O(1) initial estimate
-    /// 2. Secant Method - Fast superlinear refinement to ~1e-12
-    /// 3. Bisection - Guaranteed convergence to ~1e-15 (sub-pixel precision)
-    /// 
-    /// This triple-refinement approach provides:
-    /// - Speed: Quadratic gives instant starting point
-    /// - Efficiency: Secant rapidly improves precision
-    /// - Robustness: Bisection guarantees final precision
-    /// </summary>
+     /// <summary>
+     /// Solves for center-to-center intercept time using triple refinement:
+     /// 1. Quadratic formula - O(1) initial estimate
+     /// 2. Newton Method - Fast quadratic convergence
+     /// 3. 3-stage bisection - Robust final convergence
+     /// </summary>
+
     public static double? SolveInterceptTimeWithFullRefinement(
         Point2D casterPosition,
         Point2D targetPosition,
@@ -1657,34 +1761,138 @@ public sealed class InterceptSolver
         if (!initialEstimate.HasValue)
             return null;
 
+        double maxTime = castDelay + skillshotRange / skillshotSpeed;
+
         var displacement = targetPosition - casterPosition;
         var D = new Vector2D(displacement.X, displacement.Y);
 
-        // Step 2: Refine with Secant Method (fast, ~1e-12)
-        double secantRefined = RefineWithSecant(
+        // Step 2: Refine with Newton Method (fast, quadratic convergence)
+        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
+        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: secantTolerance);
+
+        double newtonRefined = RefineWithNewton(
             D,
             targetVelocity,
             skillshotSpeed,
             castDelay,
+            maxTime,
             initialEstimate.Value,
-            secantTolerance);
+            positionTolerance,
+            timeTolerance);
 
-        // Step 3: Final refinement with Bisection (guaranteed, ~1e-15)
+        // Step 3: Three-stage bisection refinement (robust and consistent)
+        double bisectionTimeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: bisectionTolerance);
+
         double bisectionRefined = RefineWithBisection(
             D,
             targetVelocity,
             skillshotSpeed,
             castDelay,
-            secantRefined,
-            bracketSize: Constants.TickDuration, // 1 tick bracket for final refinement
-            tolerance: bisectionTolerance);
+            maxTime,
+            newtonRefined,
+            initialBracketSize: Constants.TickDuration,
+            positionTolerance,
+            timeTolerance: bisectionTimeTolerance,
+            stages: 3,
+            maxIterationsPerStage: 60);
 
-        // Validate refined result is within range
-        double maxTime = castDelay + skillshotRange / skillshotSpeed;
-        if (bisectionRefined < castDelay || bisectionRefined > maxTime)
-            return secantRefined; // Fall back to Secant if Bisection went out of bounds
+        if (bisectionRefined <= castDelay || bisectionRefined > maxTime)
+            return newtonRefined;
 
         return bisectionRefined;
+    }
+
+    internal static double? SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double skillshotRange = double.MaxValue,
+        double tolerance = 1e-12)
+    {
+        double? initialEstimate = SolveInterceptTime(
+            casterPosition,
+            targetPosition,
+            targetVelocity,
+            skillshotSpeed,
+            castDelay,
+            skillshotRange);
+
+        if (!initialEstimate.HasValue)
+            return null;
+
+        double maxTime = castDelay + skillshotRange / skillshotSpeed;
+
+        var displacement = targetPosition - casterPosition;
+        var D = new Vector2D(displacement.X, displacement.Y);
+
+        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
+        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
+
+        // Benchmark mode: cap Newton iterations so we measure typical convergence cost.
+        double refined = RefineWithNewton(
+            D,
+            targetVelocity,
+            skillshotSpeed,
+            castDelay,
+            maxTime,
+            initialEstimate.Value,
+            positionTolerance,
+            timeTolerance,
+            maxIterations: 8);
+
+        if (refined <= castDelay || refined > maxTime)
+            return initialEstimate;
+
+        return refined;
+    }
+
+
+    internal static double? SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double skillshotRange = double.MaxValue,
+        double tolerance = 1e-12)
+    {
+        double? initialEstimate = SolveInterceptTime(
+            casterPosition,
+            targetPosition,
+            targetVelocity,
+            skillshotSpeed,
+            castDelay,
+            skillshotRange);
+
+        if (!initialEstimate.HasValue)
+            return null;
+
+        double maxTime = castDelay + skillshotRange / skillshotSpeed;
+
+        var displacement = targetPosition - casterPosition;
+        var D = new Vector2D(displacement.X, displacement.Y);
+
+        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
+        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
+
+        double refined = RefineWithNewton(
+            D,
+            targetVelocity,
+            skillshotSpeed,
+            castDelay,
+            maxTime,
+            initialEstimate.Value,
+            positionTolerance,
+            timeTolerance,
+            maxIterations: 10);
+
+        if (refined <= castDelay || refined > maxTime)
+            return initialEstimate;
+
+
+        return refined;
     }
 
     /// <summary>
@@ -1692,7 +1900,7 @@ public sealed class InterceptSolver
     /// 
     /// Achieves PIXEL-PERFECT accuracy for "hit from behind by 1 pixel" strategy:
     /// 1. Quadratic formula - O(1) initial estimate
-    /// 2. Secant Method - Fast refinement to ~1e-12
+    /// 2. Newton Method - Fast refinement
     /// 3. Bisection - Guaranteed sub-pixel precision (~1e-15)
     /// 
     /// At game resolution (typically 1920x1080), 1e-15 precision means:
@@ -1778,7 +1986,7 @@ public sealed class InterceptSolver
     /// 
     /// Algorithm:
     /// 1. Start with effectiveRadius = targetHitboxRadius + skillshotWidth/2 (standard collision)
-    /// 2. Use bisection on the width portion [0, skillshotWidth/2]
+        /// 2. Use bisection on the half-width portion [0, skillshotWidth/2]
     /// 3. Find the minimum effectiveRadius that still results in a hit
     /// 
     /// Example: hitbox=60, width=40
@@ -1833,7 +2041,7 @@ public sealed class InterceptSolver
 
         // Bisection bounds for the width multiplier [0, 1]
         // widthMultiplier = 0 → effectiveRadius = hitbox (minimum)
-        // widthMultiplier = 1 → effectiveRadius = hitbox + width (maximum)
+        // widthMultiplier = 1 → effectiveRadius = hitbox + width/2 (maximum)
         double lowMultiplier = 0.0;
         double highMultiplier = 1.0;
         
@@ -1859,10 +2067,10 @@ public sealed class InterceptSolver
         for (int i = 0; i < maxIterations; i++)
         {
             double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
-            double currentWidth = skillshotWidth * midMultiplier;
+            double currentHalfWidth = (skillshotWidth / 2) * midMultiplier;
             
-            // Check convergence (in actual width units)
-            if (currentWidth < radiusTolerance || (highMultiplier - lowMultiplier) * skillshotWidth < radiusTolerance)
+            // Check convergence (in half-width units)
+            if (currentHalfWidth < radiusTolerance || (highMultiplier - lowMultiplier) * (skillshotWidth / 2) < radiusTolerance)
                 break;
 
             var result = TrySolveWithRadius(
@@ -1904,7 +2112,7 @@ public sealed class InterceptSolver
             double widthMultiplier)
     {
         double adjustedWidth = skillshotWidth * widthMultiplier;
-        double effectiveRadius = targetHitboxRadius + adjustedWidth;
+        double effectiveRadius = targetHitboxRadius + adjustedWidth / 2;
 
         // Ensure margin doesn't exceed radius
         double actualMargin = Math.Min(behindMargin, effectiveRadius - Constants.Epsilon);
@@ -2270,6 +2478,8 @@ public sealed class InterceptSolver
         }
 
         // Bisection bounds for the width multiplier [0, 1]
+        // widthMultiplier = 0 → effectiveRadius = hitbox (minimum)
+        // widthMultiplier = 1 → effectiveRadius = hitbox + width/2 (maximum)
         double lowMultiplier = 0.0;
         double highMultiplier = 1.0;
         
@@ -2290,9 +2500,9 @@ public sealed class InterceptSolver
         for (int i = 0; i < maxIterations; i++)
         {
             double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
-            double currentWidth = skillshotWidth * midMultiplier;
+            double currentHalfWidth = (skillshotWidth / 2) * midMultiplier;
             
-            if (currentWidth < radiusTolerance || (highMultiplier - lowMultiplier) * skillshotWidth < radiusTolerance)
+            if (currentHalfWidth < radiusTolerance || (highMultiplier - lowMultiplier) * (skillshotWidth / 2) < radiusTolerance)
                 break;
 
             var result = TrySolvePathWithRadius(
@@ -2329,7 +2539,7 @@ public sealed class InterceptSolver
         double widthMultiplier)
     {
         double adjustedWidth = skillshotWidth * widthMultiplier;
-        double effectiveRadius = targetHitboxRadius + adjustedWidth;
+        double effectiveRadius = targetHitboxRadius + adjustedWidth / 2;
 
         double maxMargin = effectiveRadius > 1.0
             ? effectiveRadius - 1.0
