@@ -968,4 +968,268 @@ public class EdgeCaseRegressionTests
     }
 
     #endregion
+
+    #region Extreme Numerical Edge Cases
+    
+    /// <summary>
+    /// Tests near-zero projectile speed (just above validation threshold).
+    /// This stresses the solver with very small denominators in time calculations.
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_NearZeroProjectileSpeed_HandlesGracefully()
+    {
+        // Projectile speed just above the epsilon threshold
+        double nearZeroSpeed = Constants.Epsilon * 10;
+        
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(100, 0);
+        var targetVel = new Vector2D(0, 0); // Stationary target
+        
+        // Should either find a valid (but very large) intercept time or return null
+        var result = InterceptSolver.SolveInterceptTime(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: nearZeroSpeed,
+            castDelay: 0,
+            skillshotRange: double.MaxValue);
+        
+        // No NaN or Infinity allowed
+        if (result.HasValue)
+        {
+            Assert.False(double.IsNaN(result.Value), "Result should not be NaN");
+            Assert.False(double.IsInfinity(result.Value), "Result should not be Infinity");
+            Assert.True(result.Value > 0, "Intercept time should be positive");
+        }
+    }
+    
+    /// <summary>
+    /// Tests very large ranges (100k+ units) which stress floating-point precision.
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_VeryLargeRange_MaintainsPrecision()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(100_000, 0); // 100k units away
+        var targetVel = new Vector2D(0, 0); // Stationary
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0,
+            skillshotRange: 200_000);
+        
+        Assert.NotNull(result);
+        Assert.False(double.IsNaN(result.Value));
+        
+        // Expected time: distance / speed = 100000 / 1500 ≈ 66.67 seconds
+        double expectedTime = 100_000.0 / 1500.0;
+        Assert.True(Math.Abs(result.Value - expectedTime) < 1e-6,
+            $"Expected ~{expectedTime:F6}s, got {result.Value:F6}s");
+    }
+    
+    /// <summary>
+    /// Tests extreme cast delays (3+ seconds) which push the solver bounds.
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_ExtremeCastDelay_StillConverges()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(100, 0); // Moving away slowly
+        double extremeDelay = 3.0; // 3 second cast delay
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 2000,
+            castDelay: extremeDelay,
+            skillshotRange: 5000);
+        
+        Assert.NotNull(result);
+        Assert.True(result.Value > extremeDelay, 
+            $"Intercept time ({result.Value}) must be > cast delay ({extremeDelay})");
+        Assert.False(double.IsNaN(result.Value));
+    }
+    
+    /// <summary>
+    /// Tests degenerate case where target speed equals skillshot speed.
+    /// This makes the quadratic coefficient near-zero, switching to linear case.
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_TargetSpeedEqualsSkillshotSpeed_HandlesLinearCase()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        double speed = 1500;
+        var targetVel = new Vector2D(speed, 0); // Same speed as skillshot
+        
+        var result = InterceptSolver.SolveInterceptTime(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: speed,
+            castDelay: 0.25,
+            skillshotRange: 3000);
+        
+        // This is a boundary case - target moving directly away at same speed
+        // Result should be null (unreachable) or a valid positive time
+        if (result.HasValue)
+        {
+            Assert.True(result.Value > 0.25);
+            Assert.False(double.IsNaN(result.Value));
+            Assert.False(double.IsInfinity(result.Value));
+        }
+    }
+    
+    /// <summary>
+    /// Tests very small effective collision radius (sub-pixel).
+    /// This stresses the behind-target margin calculations.
+    /// </summary>
+    [Fact]
+    public void SolveBehindTarget_VerySmallEffectiveRadius_HandlesGracefully()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        var targetVel = new Vector2D(300, 0);
+        
+        // Tiny hitbox and width - effective radius < 5 units
+        double tinyHitbox = 2;
+        double tinyWidth = 2;
+        
+        var result = InterceptSolver.SolveBehindTargetDirect(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetHitboxRadius: tinyHitbox,
+            skillshotWidth: tinyWidth,
+            skillshotRange: 1000,
+            behindMargin: 0.5); // Margin = 0.5 < radius
+        
+        // Should handle gracefully - either valid result or null
+        if (result.HasValue)
+        {
+            Assert.False(double.IsNaN(result.Value.InterceptTime));
+            Assert.False(double.IsNaN(result.Value.AimPoint.X));
+            Assert.True(result.Value.InterceptTime > 0.25);
+        }
+    }
+    
+    /// <summary>
+    /// Tests very large distances (50k+ units) with the Full Refinement solver.
+    /// </summary>
+    [Fact]
+    public void FullRefinement_VeryLargeDistance_MaintainsAccuracy()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(50_000, 0);
+        var targetVel = new Vector2D(200, 100); // Moving diagonally
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 2000,
+            castDelay: 0.5,
+            skillshotRange: 100_000);
+        
+        Assert.NotNull(result);
+        Assert.False(double.IsNaN(result.Value));
+        Assert.True(result.Value > 0.5); // Must be after cast delay
+        
+        // Verify the solution is actually correct by checking residual
+        var D = new Vector2D(targetPos.X, targetPos.Y);
+        double t = result.Value;
+        var futureTarget = D + targetVel * t;
+        double distance = futureTarget.Length;
+        double travelDistance = 2000 * (t - 0.5);
+        
+        double residual = Math.Abs(distance - travelDistance);
+        Assert.True(residual < 1e-6, $"Residual {residual} should be < 1e-6");
+    }
+    
+    /// <summary>
+    /// Tests near-zero target velocity (just above MinVelocity threshold).
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_NearZeroTargetVelocity_TreatsAsStationary()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(500, 0);
+        // Velocity just above MinVelocity threshold
+        var nearZeroVel = new Vector2D(Constants.MinVelocity * 0.5, 0);
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, nearZeroVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            skillshotRange: 1000);
+        
+        Assert.NotNull(result);
+        
+        // Should be very close to stationary case
+        var stationaryResult = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, new Vector2D(0, 0),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            skillshotRange: 1000);
+        
+        Assert.NotNull(stationaryResult);
+        
+        // Difference should be tiny
+        double diff = Math.Abs(result.Value - stationaryResult.Value);
+        Assert.True(diff < 0.01, $"Near-zero velocity result should be close to stationary. Diff: {diff}");
+    }
+    
+    /// <summary>
+    /// Tests the RobustNewtonRaphson path with a difficult convergence case.
+    /// Target moving tangentially at high speed creates challenging root-finding.
+    /// </summary>
+    [Fact]
+    public void FullRefinement_DifficultConvergence_RobustNewtonSucceeds()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(400, 0);
+        // High tangential velocity creates a challenging intercept geometry
+        var targetVel = new Vector2D(50, 500); // Mostly perpendicular, very fast
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1800,
+            castDelay: 0.15,
+            skillshotRange: 1200);
+        
+        Assert.NotNull(result);
+        Assert.False(double.IsNaN(result.Value));
+        Assert.True(result.Value > 0.15);
+        
+        // Verify the intercept is valid
+        var D = new Vector2D(targetPos.X, targetPos.Y);
+        double t = result.Value;
+        var futureTarget = D + targetVel * t;
+        double distance = futureTarget.Length;
+        double travelDistance = 1800 * (t - 0.15);
+        
+        double residual = Math.Abs(distance - travelDistance);
+        Assert.True(residual < 1e-3, $"Residual {residual} should be < 1e-3");
+    }
+    
+    /// <summary>
+    /// Tests edge case where skillshot barely reaches target at max range.
+    /// </summary>
+    [Fact]
+    public void SolveInterceptTime_BarelyInRange_FindsSolution()
+    {
+        var casterPos = new Point2D(0, 0);
+        var targetPos = new Point2D(980, 0); // Just inside 1000 range
+        var targetVel = new Vector2D(-50, 0); // Moving slightly toward caster
+        
+        var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
+            casterPos, targetPos, targetVel,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            skillshotRange: 1000);
+        
+        Assert.NotNull(result);
+        
+        // Verify intercept is within range
+        double interceptDistance = 1500 * (result.Value - 0.25);
+        Assert.True(interceptDistance <= 1000 + 1, // Allow tiny tolerance
+            $"Intercept distance {interceptDistance} should be <= 1000");
+    }
+    
+    #endregion
 }

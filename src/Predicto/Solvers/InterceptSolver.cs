@@ -1580,13 +1580,63 @@ public sealed class InterceptSolver
         return currentEstimate;
     }
 
-     /// <summary>
-     /// Solves for center-to-center intercept time using triple refinement:
-     /// 1. Quadratic formula - O(1) initial estimate
-     /// 2. Newton Method - Fast quadratic convergence
-     /// 3. 3-stage bisection - Robust final convergence
-     /// </summary>
+    /// <summary>
+    /// Refines intercept time using RobustNewtonRaphson which combines Newton-Raphson
+    /// with automatic bisection fallback for guaranteed convergence.
+    /// 
+    /// This replaces the two-step Newton + Bisection refinement chain with a single
+    /// call that handles both fast quadratic convergence and robust fallback.
+    /// </summary>
+    /// <param name="displacement">Vector from caster to target</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="skillshotSpeed">Speed of the skillshot</param>
+    /// <param name="castDelay">Cast delay in seconds</param>
+    /// <param name="maxTime">Maximum valid intercept time</param>
+    /// <param name="estimate">Initial estimate from quadratic solver</param>
+    /// <param name="positionTolerance">Tolerance for position error (function value)</param>
+    /// <param name="subdivision">Number of subdivisions for bracketing (default 20)</param>
+    /// <param name="maxIterations">Maximum iterations (default 100)</param>
+    /// <returns>Refined intercept time</returns>
+    private static double RefineWithRobustNewton(
+        Vector2D displacement,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double maxTime,
+        double estimate,
+        double positionTolerance,
+        int subdivision = 20,
+        int maxIterations = 100)
+    {
+        double minTime = castDelay + Constants.Epsilon;
+        double clampedEstimate = Math.Clamp(estimate, minTime, maxTime);
 
+        // Define the intercept function f(t) = |D + V*t| - s*(t - d)
+        Func<double, double> f = t => EvaluateInterceptFunction(displacement, targetVelocity, skillshotSpeed, castDelay, t);
+
+        // Define the derivative f'(t)
+        Func<double, double> df = t => EvaluateInterceptDerivative(displacement, targetVelocity, skillshotSpeed, castDelay, t);
+
+        // Check if estimate is already good enough
+        if (Math.Abs(f(clampedEstimate)) <= positionTolerance)
+            return clampedEstimate;
+
+        // Use MathNet's RobustNewtonRaphson.TryFindRoot
+        // This combines Newton-Raphson with automatic bisection fallback
+        if (RobustNewtonRaphson.TryFindRoot(f, df, minTime, maxTime, positionTolerance, maxIterations, subdivision, out double root))
+        {
+            return root;
+        }
+
+        // If RobustNewtonRaphson fails, return the clamped estimate
+        return clampedEstimate;
+    }
+
+     /// <summary>
+     /// Solves for center-to-center intercept time using two-stage refinement:
+     /// 1. Quadratic formula - O(1) initial estimate
+     /// 2. RobustNewtonRaphson - Fast convergence with automatic bisection fallback
+     /// </summary>
     public static double? SolveInterceptTimeWithFullRefinement(
         Point2D casterPosition,
         Point2D targetPosition,
@@ -1614,40 +1664,22 @@ public sealed class InterceptSolver
         var displacement = targetPosition - casterPosition;
         var D = new Vector2D(displacement.X, displacement.Y);
 
-        // Step 2: Refine with Newton Method (fast, quadratic convergence)
+        // Step 2: Refine with RobustNewtonRaphson (combines Newton + bisection fallback)
         double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
-        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: secantTolerance);
 
-        double newtonRefined = RefineWithNewton(
+        double refined = RefineWithRobustNewton(
             D,
             targetVelocity,
             skillshotSpeed,
             castDelay,
             maxTime,
             initialEstimate.Value,
-            positionTolerance,
-            timeTolerance);
+            positionTolerance);
 
-        // Step 3: Three-stage bisection refinement (robust and consistent)
-        double bisectionTimeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: bisectionTolerance);
+        if (refined <= castDelay || refined > maxTime)
+            return initialEstimate;
 
-        double bisectionRefined = RefineWithBisection(
-            D,
-            targetVelocity,
-            skillshotSpeed,
-            castDelay,
-            maxTime,
-            newtonRefined,
-            initialBracketSize: Constants.TickDuration,
-            positionTolerance,
-            timeTolerance: bisectionTimeTolerance,
-            stages: 3,
-            maxIterationsPerStage: 60);
-
-        if (bisectionRefined <= castDelay || bisectionRefined > maxTime)
-            return newtonRefined;
-
-        return bisectionRefined;
+        return refined;
     }
 
     internal static double? SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
