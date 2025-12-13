@@ -358,8 +358,8 @@ Low-level mathematical solver with multiple precision levels.
 | `SolveInterceptTime` | Basic center-to-center intercept |
 | `SolveEdgeInterceptTime` | Edge-to-edge collision detection |
 | `SolveBehindTarget` | Behind-target strategy (quadratic only) |
-| `SolveBehindTargetWithSecantRefinement` | + Secant refinement |
-| `SolveBehindTargetWithFullRefinement` | + Bisection for max precision |
+| `RefineWithRobustNewton` | + Robust Newton-Raphson refinement |
+| `SolveInterceptTimeWithFullRefinement` | + Bisection for max precision |
 | `SolvePathBehindTargetIntercept` | Multi-waypoint path support |
 | `CalculateConfidence` | Prediction reliability score |
 
