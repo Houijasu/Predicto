@@ -5,7 +5,8 @@ A high-precision ballistic prediction engine for skillshot interception in game 
 ## Features
 
 - **Behind-Target Strategy**: Aims BEHIND the target relative to their movement direction - target cannot see the projectile coming and must completely reverse to dodge
-- **Sub-Pixel Precision**: Triple refinement system (Quadratic → Secant → Bisection) achieves ~1e-15 precision
+- **Path-End Blending**: Smoothly transitions from trailing-edge to center aim when target approaches the end of their movement path (C1-continuous smoothstep)
+- **Sub-Pixel Precision**: Refinement system using MathNet.Numerics (RobustNewtonRaphson + Bisection) achieves ~1e-15 precision
 - **Linear & Circular Skillshots**: Full support for both projectile-based and ground-targeted abilities
 - **Multi-Target Priority Selection**: Rank and select optimal targets in team fights
 - **Reaction Time Modeling**: Confidence adjustment based on human reaction time limitations
@@ -32,6 +33,18 @@ Why this is optimal:
 - Must completely REVERSE direction to dodge
 - Projectile "catches up" from behind
 
+### Path-End Blending
+
+When a target is following a path and approaching the final waypoint (about to stop), pure trailing-edge aim becomes suboptimal. Predicto smoothly blends from trailing-edge to center aim:
+
+```
+Path remaining > 0.5s: Pure trailing-edge (aim behind target)
+Path remaining < 0.5s: Smooth blend toward center
+Path remaining = 0:    Center aim (fastest intercept for stopped target)
+```
+
+The transition uses a C1-continuous smoothstep function for visually smooth aim adjustment.
+
 ### Mathematical Model
 
 The engine solves the interception equation:
@@ -51,7 +64,7 @@ Where:
 ### Triple Refinement Pipeline
 
 1. **Quadratic Formula**: O(1) analytical solution for initial estimate
-2. **Secant Method**: Superlinear convergence to ~1e-12 precision
+2. **RobustNewtonRaphson**: Combines Newton-Raphson with bisection fallback for robust convergence
 3. **Bisection Refinement**: Guaranteed convergence to ~1e-15 (sub-pixel precision)
 
 ## Project Structure
@@ -75,7 +88,7 @@ src/
     Program.cs                 # Raylib-based visualization
 
 tests/
-  Predicto.Tests/              # Unit tests (111 tests)
+  Predicto.Tests/              # Unit tests (144 tests)
     InterceptSolverTests.cs    # Solver unit tests
     UltimateTests.cs           # Integration tests
     EdgeCaseRegressionTests.cs # Regression tests for bug fixes
@@ -260,12 +273,24 @@ dotnet run --project src/Predicto.Simulation
 
 Controls:
 - **Left Click**: Set caster position
-- **Right Click**: Set target position / add waypoints (path mode)
+- **Right Click**: Set target position (clears waypoints)
+- **Shift+Right Click**: Add waypoint (path mode)
 - **Space**: Fire skillshot
-- **P**: Toggle path mode (multi-waypoint)
-- **C**: Start continuous firing (path mode)
-- **R**: Reset
+- **Delete/Backspace**: Clear waypoints
+- **Tab**: Cycle through presets
+- **` (Backtick)**: Toggle Linear/Circular mode
+- **Q/W**: Decrease/Increase target speed
+- **E/R**: Decrease/Increase projectile speed
+- **1-5**: Set time multiplier
 - **Mouse Wheel**: Zoom
+
+### Visualization Legend (Path Mode)
+
+When in path mode with linear skillshots, two aim points are displayed:
+- **Green circle**: Current prediction (with path-end blending)
+- **Blue circle**: Pure trailing-edge prediction (no blending)
+
+This allows you to see the difference between blended and pure trailing-edge aim, especially when the target is near the end of their path.
 
 ## Running Tests
 
@@ -273,10 +298,11 @@ Controls:
 dotnet test
 ```
 
-Current test coverage: **111 tests** covering:
+Current test coverage: **144 tests** covering:
 - Basic interception scenarios
 - Edge cases (boundary conditions, numerical precision)
 - Multi-target priority selection
+- Path-end blending behavior
 - Regression tests for bug fixes
 - Performance benchmarks
 
@@ -302,6 +328,7 @@ Key parameters in `Constants.cs`:
 | `MaxReasonableVelocity` | 2000 units/s | Maximum target speed |
 | `MaxReasonableSkillshotSpeed` | 5000 units/s | Maximum skillshot speed |
 | `TrailingEdgeMargin` | 1.0 unit | Pixel margin for behind-target aim |
+| `PathEndBlendThreshold` | 0.5s | Time threshold for path-end blending |
 | `AverageReactionTime` | 0.25s | Human average reaction time |
 | `MinReactionTime` | 0.15s | Fast human reaction time |
 | `MaxReactionTime` | 0.5s | Slow human reaction time |
@@ -315,6 +342,7 @@ Main prediction engine implementing `IPrediction`.
 | Method | Description |
 |--------|-------------|
 | `Predict(PredictionInput)` | Predicts intercept for linear skillshot |
+| `PredictPureTrailingEdge(PredictionInput)` | Predicts without path-end blending (always trailing-edge) |
 | `PredictCircular(CircularPredictionInput)` | Predicts intercept for circular skillshot |
 | `RankTargets(casterPos, skillshot, targets)` | Ranks multiple targets by hit probability |
 | `RankTargetsCircular(casterPos, skillshot, targets)` | Ranks targets for circular skillshot |
