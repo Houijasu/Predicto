@@ -25,12 +25,12 @@ public class EdgeCaseRegressionTests
     {
         // This test verifies the fix for inconsistent inequality handling.
         // The solver should use strict inequality (t > castDelay), not (t >= castDelay).
-        
+
         // Setup target that's NOT in collision radius at launch time
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(500, 0); // Far enough that target won't be in radius at launch
         var targetVel = new Vector2D(0, 300); // Moving perpendicular
-        
+
         var result = InterceptSolver.SolveEdgeInterceptTime(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1500,
@@ -38,10 +38,10 @@ public class EdgeCaseRegressionTests
             targetHitboxRadius: 65,
             skillshotWidth: 70,
             skillshotRange: 1000);
-        
+
         // Solution must be strictly greater than cast delay
         Assert.NotNull(result);
-        Assert.True(result.Value > 0.25, 
+        Assert.True(result.Value > 0.25,
             $"Intercept time ({result.Value}) must be strictly > cast delay (0.25)");
     }
 
@@ -65,7 +65,7 @@ public class EdgeCaseRegressionTests
             skillshotRange: 1000);
 
         Assert.NotNull(result);
-        Assert.True(result.Value > castDelay, 
+        Assert.True(result.Value > castDelay,
             $"Intercept time ({result.Value}) must be > cast delay ({castDelay})");
     }
 
@@ -99,7 +99,7 @@ public class EdgeCaseRegressionTests
             // Result should either be null (unreachable) or strictly > 0
             if (result != null)
             {
-                Assert.True(result.Value > Constants.Epsilon, 
+                Assert.True(result.Value > Constants.Epsilon,
                     $"For target at {targetPos} with vel {targetVel}: time {result.Value} should be > epsilon");
             }
         }
@@ -121,17 +121,17 @@ public class EdgeCaseRegressionTests
         // At exactly 2.0: proportional formula gives 2.0 * 0.5 = 1.0
         // Above 2.0: fixed formula gives 1.0
         // Both should be equal at the boundary!
-        
+
         double belowThreshold = 1.999;
         double atThreshold = 2.0;
         double aboveThreshold = 2.001;
-        
+
         // Calculate margins using the public solver method that uses adaptive margin internally
         // We'll verify the behavior through prediction results consistency
-        
+
         var casterPos = new Point2D(0, 0);
         var targetVel = new Vector2D(0, 300);
-        
+
         // Test with very small effective radius (below threshold)
         var smallRadiusInput = new PredictionInput(
             CasterPosition: casterPos,
@@ -139,42 +139,42 @@ public class EdgeCaseRegressionTests
             TargetVelocity: targetVel,
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 2.0, Delay: 0), // width/2 = 1
             TargetHitboxRadius: belowThreshold - 1.0); // effectiveRadius = 1.999
-        
+
         var normalRadiusInput = new PredictionInput(
             CasterPosition: casterPos,
             TargetPosition: new Point2D(500, 0),
             TargetVelocity: targetVel,
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 2.0, Delay: 0),
             TargetHitboxRadius: atThreshold - 1.0); // effectiveRadius = 2.0
-        
+
         var largeRadiusInput = new PredictionInput(
             CasterPosition: casterPos,
             TargetPosition: new Point2D(500, 0),
             TargetVelocity: targetVel,
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 2.0, Delay: 0),
             TargetHitboxRadius: aboveThreshold - 1.0); // effectiveRadius = 2.001
-        
+
         var smallResult = _prediction.Predict(smallRadiusInput);
         var normalResult = _prediction.Predict(normalRadiusInput);
         var largeResult = _prediction.Predict(largeRadiusInput);
-        
+
         // All should produce valid predictions (no crashes from discontinuity)
         Assert.IsType<PredictionResult.Hit>(smallResult);
         Assert.IsType<PredictionResult.Hit>(normalResult);
         Assert.IsType<PredictionResult.Hit>(largeResult);
-        
+
         // Intercept times should be very similar (continuous behavior)
         var smallHit = (PredictionResult.Hit)smallResult;
         var normalHit = (PredictionResult.Hit)normalResult;
         var largeHit = (PredictionResult.Hit)largeResult;
-        
+
         double diffSmallNormal = Math.Abs(smallHit.InterceptTime - normalHit.InterceptTime);
         double diffNormalLarge = Math.Abs(normalHit.InterceptTime - largeHit.InterceptTime);
-        
+
         // Differences should be proportional to radius change (not 500M factor jump)
-        Assert.True(diffSmallNormal < 0.01, 
+        Assert.True(diffSmallNormal < 0.01,
             $"Time jump from {belowThreshold} to {atThreshold} radius: {diffSmallNormal}s (should be smooth)");
-        Assert.True(diffNormalLarge < 0.01, 
+        Assert.True(diffNormalLarge < 0.01,
             $"Time jump from {atThreshold} to {aboveThreshold} radius: {diffNormalLarge}s (should be smooth)");
     }
 
@@ -186,11 +186,11 @@ public class EdgeCaseRegressionTests
     {
         // For effectiveRadius <= 2.0, margin = effectiveRadius * 0.5
         // This prevents the margin from exceeding the collision zone
-        
+
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(200, 0);
         var targetVel = new Vector2D(0, 100);
-        
+
         // Tiny target and spell: effectiveRadius = 0.5 + 0.25 = 0.75
         // Proportional margin = 0.75 * 0.5 = 0.375
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
@@ -200,19 +200,19 @@ public class EdgeCaseRegressionTests
             targetHitboxRadius: 0.5,
             skillshotWidth: 0.5,
             skillshotRange: 500);
-        
+
         Assert.NotNull(result);
-        
+
         // Verify the solution is valid - separation should be less than effectiveRadius
         var (aimPoint, _, interceptTime) = result.Value;
         double effectiveRadius = 0.5 + 0.5 / 2.0; // 0.75
-        
+
         double travelDist = (aimPoint - casterPos).Length;
         double arrivalTime = travelDist / 1000.0;
         var targetAtArrival = targetPos + targetVel * arrivalTime;
         double separation = (aimPoint - targetAtArrival).Length;
-        
-        Assert.True(separation < effectiveRadius, 
+
+        Assert.True(separation < effectiveRadius,
             $"Separation ({separation:F4}) must be < effective radius ({effectiveRadius:F4})");
     }
 
@@ -224,14 +224,14 @@ public class EdgeCaseRegressionTests
     {
         // For effectiveRadius > 2.0, margin = 1.0 (fixed)
         // Normal gameplay: targetHitbox=65, spellWidth=70 → effectiveRadius = 100
-        
+
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(500, 0);
         var targetVel = new Vector2D(0, 300);
         double hitbox = 65;
         double width = 70;
         double effectiveRadius = hitbox + width / 2; // 100
-        
+
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1500,
@@ -240,15 +240,15 @@ public class EdgeCaseRegressionTests
             skillshotWidth: width,
             skillshotRange: 1000,
             behindMargin: 1.0); // 1-unit margin
-        
+
         Assert.NotNull(result);
-        
+
         var (aimPoint, _, _) = result.Value;
         double travelDist = (aimPoint - casterPos).Length;
         double arrivalTime = travelDist / 1500.0;
         var targetAtArrival = targetPos + targetVel * arrivalTime;
         double separation = (aimPoint - targetAtArrival).Length;
-        
+
         // Expected separation = effectiveRadius - margin = 100 - 1 = 99
         double expectedSeparation = effectiveRadius - 1.0;
         Assert.Equal(expectedSeparation, separation, precision: 6);
@@ -273,15 +273,15 @@ public class EdgeCaseRegressionTests
             TargetVelocity: new Vector2D(0, 300),
             Skillshot: new CircularSkillshot(Radius: 200, Range: 800, Delay: 0.5),
             TargetHitboxRadius: 65);
-        
+
         var result = _prediction.PredictCircular(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Target is moving north, so predicted position should be above current position
         Assert.True(hit.PredictedTargetPosition.Y > 0);
-        
+
         // Intercept time should be >= delay
         Assert.True(hit.InterceptTime >= 0.5);
     }
@@ -294,16 +294,16 @@ public class EdgeCaseRegressionTests
     {
         // For effectiveRadius < 1.0, use effectiveRadius * 0.5
         // This is consistent with linear skillshot behavior
-        
+
         var input = new CircularPredictionInput(
             CasterPosition: new Point2D(0, 0),
             TargetPosition: new Point2D(100, 0),
             TargetVelocity: new Vector2D(0, 50),
             Skillshot: new CircularSkillshot(Radius: 0.3, Range: 200, Delay: 0.2), // Tiny radius
             TargetHitboxRadius: 0.2); // effectiveRadius = 0.3 + 0.2 = 0.5 < 1.0
-        
+
         var result = _prediction.PredictCircular(input);
-        
+
         // Should produce a valid prediction without crashing
         Assert.IsType<PredictionResult.Hit>(result);
     }
@@ -316,19 +316,19 @@ public class EdgeCaseRegressionTests
     {
         // For circular spells, margin = effectiveRadius * 0.5
         // This aims halfway between center and trailing edge
-        
+
         var input = new CircularPredictionInput(
             CasterPosition: new Point2D(0, 0),
             TargetPosition: new Point2D(400, 0),
             TargetVelocity: new Vector2D(0, 200), // Moving north
             Skillshot: new CircularSkillshot(Radius: 100, Range: 800, Delay: 0.5),
             TargetHitboxRadius: 65); // effectiveRadius = 100 + 65 = 165
-        
+
         var result = _prediction.PredictCircular(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // The aim point should be BEHIND (south of) the predicted target position
         // because we're using behind-target strategy
         Assert.True(hit.CastPosition.Y < hit.PredictedTargetPosition.Y,
@@ -336,9 +336,9 @@ public class EdgeCaseRegressionTests
     }
 
     #endregion
- 
+
     #region Radius Bisection Regression Tests
- 
+
     [Fact]
     public void BehindTarget_RadiusBisection_MaxEffectiveRadius_EqualsHitboxPlusHalfWidth()
     {
@@ -347,10 +347,10 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(400, 0);
         var targetVel = new Vector2D(250, 0);
- 
+
         double hitbox = 65;
         double width = 70;
- 
+
         var result = InterceptSolver.SolveBehindTargetWithRadiusBisection(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1000,
@@ -361,15 +361,15 @@ public class EdgeCaseRegressionTests
             behindMargin: 1.0,
             radiusTolerance: 0.01,
             maxIterations: 25);
- 
+
         Assert.NotNull(result);
         var (_, _, _, effectiveRadius) = result.Value;
- 
+
         double expectedMax = hitbox + width / 2;
         Assert.True(effectiveRadius <= expectedMax + 1e-9,
             $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
     }
- 
+
     [Fact]
     public void PathBehindTarget_RadiusBisection_MaxEffectiveRadius_EqualsHitboxPlusHalfWidth()
     {
@@ -378,10 +378,10 @@ public class EdgeCaseRegressionTests
         var currentPos = new Point2D(400, 0);
         var destination = new Point2D(1200, 0);
         var path = TargetPath.FromDestination(currentPos, destination, speed: 250);
- 
+
         double hitbox = 65;
         double width = 70;
- 
+
         var result = InterceptSolver.SolvePathBehindTargetWithRadiusBisection(
             casterPos, path,
             skillshotSpeed: 1000,
@@ -392,19 +392,19 @@ public class EdgeCaseRegressionTests
             behindMargin: 1.0,
             radiusTolerance: 0.01,
             maxIterations: 25);
- 
+
         Assert.NotNull(result);
         var (_, effectiveRadius) = result.Value;
- 
+
         double expectedMax = hitbox + width / 2;
         Assert.True(effectiveRadius <= expectedMax + 1e-9,
             $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
     }
- 
+
     #endregion
- 
+
     #region TargetPath Contract Regression Tests
- 
+
     [Fact]
     public void TargetPath_DestinationOnly_OneWaypoint_PathFunctionsAreConsistent()
     {
@@ -412,22 +412,22 @@ public class EdgeCaseRegressionTests
         var currentPos = new Point2D(100, 100);
         var destination = new Point2D(300, 100);
         var path = TargetPath.FromDestination(currentPos, destination, speed: 200);
- 
+
         Assert.Single(path.Waypoints);
         Assert.Equal(0, path.CurrentWaypointIndex);
- 
+
         // Basic invariants
         Assert.Equal(currentPos, path.GetPositionAtTime(0));
         Assert.True(path.GetVelocityAtTime(0).Length > 0);
- 
+
         // After enough time, position clamps to final waypoint and velocity becomes 0
         double duration = (destination - currentPos).Length / 200.0;
         Assert.Equal(destination, path.GetPositionAtTime(duration + 1.0));
         Assert.Equal(0, path.GetVelocityAtTime(duration + 1.0).Length, precision: 12);
     }
- 
+
     #endregion
- 
+
     #region Constants.Epsilon Consistency Tests
 
     /// <summary>
@@ -441,12 +441,12 @@ public class EdgeCaseRegressionTests
         // Test numerical stability at epsilon boundaries
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(500, 0);
-        
+
         // Test with velocity magnitude near epsilon
         var nearZeroVelocity = new Vector2D(Constants.Epsilon * 0.5, 0);
         var atEpsilonVelocity = new Vector2D(Constants.Epsilon, 0);
         var aboveEpsilonVelocity = new Vector2D(Constants.Epsilon * 2, 0);
-        
+
         // All should produce stable results (no NaN/Infinity)
         foreach (var vel in new[] { nearZeroVelocity, atEpsilonVelocity, aboveEpsilonVelocity })
         {
@@ -454,7 +454,7 @@ public class EdgeCaseRegressionTests
                 casterPos, targetPos, vel,
                 skillshotSpeed: 1500,
                 castDelay: 0.25);
-            
+
             Assert.NotNull(result);
             Assert.False(double.IsNaN(result.Value));
             Assert.False(double.IsInfinity(result.Value));
@@ -475,7 +475,7 @@ public class EdgeCaseRegressionTests
             skillshotSpeed: 1000,
             skillshotRange: 1000,
             castDelay: 0.5);
-        
+
         Assert.True(confidence >= Constants.Epsilon);
         Assert.True(confidence <= 1.0);
     }
@@ -493,7 +493,7 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(50000, 30000); // Large distance
         var targetVel = new Vector2D(-100, 150);
-        
+
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 3000,
@@ -501,14 +501,14 @@ public class EdgeCaseRegressionTests
             targetHitboxRadius: 65,
             skillshotWidth: 70,
             skillshotRange: 100000);
-        
+
         Assert.NotNull(result);
         var (aimPoint, _, interceptTime) = result.Value;
-        
+
         // Verify time-travel consistency
         double travelDist = (aimPoint - casterPos).Length;
         double arrivalTime = 0.5 + travelDist / 3000.0;
-        
+
         Assert.Equal(interceptTime, arrivalTime, precision: 9);
     }
 
@@ -521,7 +521,7 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(50, 0); // Very close
         var targetVel = new Vector2D(0, 50);
-        
+
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 5000, // Very fast projectile
@@ -529,10 +529,10 @@ public class EdgeCaseRegressionTests
             targetHitboxRadius: 65,
             skillshotWidth: 70,
             skillshotRange: 500);
-        
+
         Assert.NotNull(result);
         var (_, _, interceptTime) = result.Value;
-        
+
         Assert.True(interceptTime > 0);
         Assert.True(interceptTime < 0.1, "Very close target should have quick intercept");
         Assert.False(double.IsNaN(interceptTime));
@@ -553,9 +553,9 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(1000, 0), // Exactly at range
             TargetVelocity: new Vector2D(0, 0), // Stationary
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         // Should be a hit (within range tolerance)
         Assert.IsType<PredictionResult.Hit>(result);
     }
@@ -577,9 +577,9 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(1101, 0), // 1101 - 100 = 1001 > 1000
             TargetVelocity: new Vector2D(0, 0),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.OutOfRange>(result);
     }
 
@@ -594,9 +594,9 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(0, 0), // Same position
             TargetVelocity: new Vector2D(100, 0),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         // Should produce a valid hit (target is within collision radius at start)
         Assert.IsType<PredictionResult.Hit>(result);
     }
@@ -634,7 +634,7 @@ public class EdgeCaseRegressionTests
     {
         // Flight time = 2x reaction time
         double factor = Constants.GetReactionTimeFactor(0.5, 0.25);
-        
+
         // Should be 0.5 (minimum) at 2x reaction time
         Assert.Equal(0.5, factor, precision: 6);
     }
@@ -647,7 +647,7 @@ public class EdgeCaseRegressionTests
     {
         // Flight time = 3x reaction time
         double factor = Constants.GetReactionTimeFactor(0.75, 0.25);
-        
+
         // Should be clamped to 0.5
         Assert.Equal(0.5, factor);
     }
@@ -660,7 +660,7 @@ public class EdgeCaseRegressionTests
     {
         // Use default reaction time (0.25s)
         double factor = Constants.GetReactionTimeFactor(0.1);
-        
+
         // Should use average reaction time
         Assert.Equal(1.0, factor);
     }
@@ -677,23 +677,23 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(300, 0),
             TargetVelocity: new Vector2D(0, 200),
             Skillshot: new LinearSkillshot(Speed: 2500, Range: 1000, Width: 70, Delay: 0)); // Very fast
-        
+
         // Slow skillshot (long flight time)
         var slowInput = new PredictionInput(
             CasterPosition: new Point2D(0, 0),
             TargetPosition: new Point2D(300, 0),
             TargetVelocity: new Vector2D(0, 200),
             Skillshot: new LinearSkillshot(Speed: 800, Range: 1000, Width: 70, Delay: 0)); // Slow
-        
+
         var fastResult = _prediction.Predict(fastInput);
         var slowResult = _prediction.Predict(slowInput);
-        
+
         Assert.IsType<PredictionResult.Hit>(fastResult);
         Assert.IsType<PredictionResult.Hit>(slowResult);
-        
+
         var fastHit = (PredictionResult.Hit)fastResult;
         var slowHit = (PredictionResult.Hit)slowResult;
-        
+
         // Fast skillshot should have higher confidence
         Assert.True(fastHit.Confidence > slowHit.Confidence,
             $"Fast confidence ({fastHit.Confidence:F3}) should be > slow confidence ({slowHit.Confidence:F3})");
@@ -717,13 +717,13 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(50, 0), // Inside effective radius
             TargetVelocity: new Vector2D(500, 0), // Moving away fast
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         // Should be a hit since target starts in range
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Intercept time should be reasonable (not negative or huge)
         Assert.True(hit.InterceptTime >= 0);
         Assert.True(hit.InterceptTime < 2.0); // Should catch within 2 seconds
@@ -740,12 +740,12 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(30, 0), // Very close
             TargetVelocity: new Vector2D(0, 400), // Moving perpendicular
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.1));
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // The aim point Y should be positive (ahead of target)
         Assert.True(hit.PredictedTargetPosition.Y > 0,
             "Target should be predicted to have moved in Y direction");
@@ -763,19 +763,19 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(100, 0); // Close but not inside collision radius
         var targetVel = new Vector2D(0, 0); // Stationary
-        
+
         // Cast delay of 0.25, fast projectile
         var input = new PredictionInput(
             CasterPosition: casterPos,
             TargetPosition: targetPos,
             TargetVelocity: targetVel,
             Skillshot: new LinearSkillshot(Speed: 2000, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Intercept time should be >= cast delay
         Assert.True(hit.InterceptTime >= 0.25,
             $"Intercept time ({hit.InterceptTime}) should be >= cast delay (0.25)");
@@ -793,13 +793,13 @@ public class EdgeCaseRegressionTests
             TargetVelocity: new Vector2D(0, 200),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 0, Delay: 0.25), // Zero width
             TargetHitboxRadius: 65);
-        
+
         var result = _prediction.Predict(input);
-        
+
         // Should still work (uses target hitbox radius only)
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Values should be valid (no NaN)
         Assert.False(double.IsNaN(hit.CastPosition.X));
         Assert.False(double.IsNaN(hit.CastPosition.Y));
@@ -818,12 +818,12 @@ public class EdgeCaseRegressionTests
             TargetVelocity: new Vector2D(0, 200),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 500, Delay: 0.25), // Very wide
             TargetHitboxRadius: 65);
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // With large effective radius (315), the margin should still be valid
         Assert.True(hit.Confidence > 0);
     }
@@ -840,9 +840,9 @@ public class EdgeCaseRegressionTests
             TargetVelocity: new Vector2D(0, 200),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
             TargetHitboxRadius: 0); // Zero hitbox
-        
+
         var result = _prediction.Predict(input);
-        
+
         // Should still work (uses skillshot width/2 only)
         Assert.IsType<PredictionResult.Hit>(result);
     }
@@ -857,7 +857,7 @@ public class EdgeCaseRegressionTests
         // Below: margin = effectiveRadius * 0.5
         // Above: margin = 1.0
         // At 2.0: 2.0 * 0.5 = 1.0 (matches)
-        
+
         // Test just below threshold
         var inputBelowThreshold = new PredictionInput(
             CasterPosition: new Point2D(0, 0),
@@ -865,17 +865,17 @@ public class EdgeCaseRegressionTests
             TargetVelocity: new Vector2D(100, 0),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 2, Delay: 0), // Width 2 -> effective = 1 + hitbox
             TargetHitboxRadius: 1); // effectiveRadius = 1 + 1 = 2 (at threshold)
-        
+
         var inputAboveThreshold = new PredictionInput(
             CasterPosition: new Point2D(0, 0),
             TargetPosition: new Point2D(500, 0),
             TargetVelocity: new Vector2D(100, 0),
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 10, Delay: 0), // Width 10 -> effective = 5 + hitbox
             TargetHitboxRadius: 60); // effectiveRadius = 5 + 60 = 65 (above threshold)
-        
+
         var resultBelow = _prediction.Predict(inputBelowThreshold);
         var resultAbove = _prediction.Predict(inputAboveThreshold);
-        
+
         // Both should produce valid hits
         Assert.IsType<PredictionResult.Hit>(resultBelow);
         Assert.IsType<PredictionResult.Hit>(resultAbove);
@@ -894,21 +894,21 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(500, 0),
             TargetVelocity: new Vector2D(10, 0), // 10 units/s = 0.33 units/tick
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Slow target should still produce reasonable prediction
         // Note: Tangent geometry may produce slightly different confidence values
         Assert.True(hit.Confidence > 0.45, $"Expected confidence > 0.45, got {hit.Confidence}");
-        
+
         // Aim point is behind target by (effectiveRadius - margin)
         // effectiveRadius = 65 + 35 = 100, margin = 1.0
         // So aim ~= targetPos - (100 - 1) = 500 - 99 = 401
         // Allow tolerance for target movement and calculation
-        Assert.True(hit.CastPosition.X > 350 && hit.CastPosition.X < 500, 
+        Assert.True(hit.CastPosition.X > 350 && hit.CastPosition.X < 500,
             $"Expected aim behind target (350-500), got {hit.CastPosition.X}");
     }
 
@@ -923,16 +923,16 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(700, 0),
             TargetVelocity: new Vector2D(-350, 0), // Moving directly toward caster
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         Assert.IsType<PredictionResult.Hit>(result);
         var hit = (PredictionResult.Hit)result;
-        
+
         // Fast approaching targets are harder to predict (timing more critical),
         // so confidence reflects this uncertainty. Just verify it's reasonable.
         Assert.True(hit.Confidence > 0.2, $"Expected confidence > 0.2, got {hit.Confidence}");
-        
+
         // Aim point should be between caster and target (target coming toward us)
         Assert.True(hit.CastPosition.X < 700, $"Expected aim < 700, got {hit.CastPosition.X}");
         Assert.True(hit.CastPosition.X > 0, $"Expected aim > 0, got {hit.CastPosition.X}");
@@ -953,13 +953,13 @@ public class EdgeCaseRegressionTests
             TargetPosition: new Point2D(1200, 0), // Just beyond range (1000)
             TargetVelocity: new Vector2D(100, 200), // Moving at angle, partially away
             Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25));
-        
+
         var result = _prediction.Predict(input);
-        
+
         // With accurate vector math, this might be hittable if target curves back into range
         // The test verifies no crash/NaN occurs and result is reasonable
         Assert.NotNull(result);
-        
+
         if (result is PredictionResult.Hit hit)
         {
             Assert.False(double.IsNaN(hit.CastPosition.X));
@@ -970,7 +970,7 @@ public class EdgeCaseRegressionTests
     #endregion
 
     #region Extreme Numerical Edge Cases
-    
+
     /// <summary>
     /// Tests near-zero projectile speed (just above validation threshold).
     /// This stresses the solver with very small denominators in time calculations.
@@ -980,18 +980,18 @@ public class EdgeCaseRegressionTests
     {
         // Projectile speed just above the epsilon threshold
         double nearZeroSpeed = Constants.Epsilon * 10;
-        
+
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(100, 0);
         var targetVel = new Vector2D(0, 0); // Stationary target
-        
+
         // Should either find a valid (but very large) intercept time or return null
         var result = InterceptSolver.SolveInterceptTime(
             casterPos, targetPos, targetVel,
             skillshotSpeed: nearZeroSpeed,
             castDelay: 0,
             skillshotRange: double.MaxValue);
-        
+
         // No NaN or Infinity allowed
         if (result.HasValue)
         {
@@ -1000,7 +1000,7 @@ public class EdgeCaseRegressionTests
             Assert.True(result.Value > 0, "Intercept time should be positive");
         }
     }
-    
+
     /// <summary>
     /// Tests very large ranges (100k+ units) which stress floating-point precision.
     /// </summary>
@@ -1010,22 +1010,22 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(100_000, 0); // 100k units away
         var targetVel = new Vector2D(0, 0); // Stationary
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1500,
             castDelay: 0,
             skillshotRange: 200_000);
-        
+
         Assert.NotNull(result);
         Assert.False(double.IsNaN(result.Value));
-        
+
         // Expected time: distance / speed = 100000 / 1500 ≈ 66.67 seconds
         double expectedTime = 100_000.0 / 1500.0;
         Assert.True(Math.Abs(result.Value - expectedTime) < 1e-6,
             $"Expected ~{expectedTime:F6}s, got {result.Value:F6}s");
     }
-    
+
     /// <summary>
     /// Tests extreme cast delays (3+ seconds) which push the solver bounds.
     /// </summary>
@@ -1036,19 +1036,19 @@ public class EdgeCaseRegressionTests
         var targetPos = new Point2D(500, 0);
         var targetVel = new Vector2D(100, 0); // Moving away slowly
         double extremeDelay = 3.0; // 3 second cast delay
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 2000,
             castDelay: extremeDelay,
             skillshotRange: 5000);
-        
+
         Assert.NotNull(result);
-        Assert.True(result.Value > extremeDelay, 
+        Assert.True(result.Value > extremeDelay,
             $"Intercept time ({result.Value}) must be > cast delay ({extremeDelay})");
         Assert.False(double.IsNaN(result.Value));
     }
-    
+
     /// <summary>
     /// Tests degenerate case where target speed equals skillshot speed.
     /// This makes the quadratic coefficient near-zero, switching to linear case.
@@ -1060,13 +1060,13 @@ public class EdgeCaseRegressionTests
         var targetPos = new Point2D(500, 0);
         double speed = 1500;
         var targetVel = new Vector2D(speed, 0); // Same speed as skillshot
-        
+
         var result = InterceptSolver.SolveInterceptTime(
             casterPos, targetPos, targetVel,
             skillshotSpeed: speed,
             castDelay: 0.25,
             skillshotRange: 3000);
-        
+
         // This is a boundary case - target moving directly away at same speed
         // Result should be null (unreachable) or a valid positive time
         if (result.HasValue)
@@ -1076,7 +1076,7 @@ public class EdgeCaseRegressionTests
             Assert.False(double.IsInfinity(result.Value));
         }
     }
-    
+
     /// <summary>
     /// Tests very small effective collision radius (sub-pixel).
     /// This stresses the behind-target margin calculations.
@@ -1087,11 +1087,11 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(500, 0);
         var targetVel = new Vector2D(300, 0);
-        
+
         // Tiny hitbox and width - effective radius < 5 units
         double tinyHitbox = 2;
         double tinyWidth = 2;
-        
+
         var result = InterceptSolver.SolveBehindTargetDirect(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1500,
@@ -1100,7 +1100,7 @@ public class EdgeCaseRegressionTests
             skillshotWidth: tinyWidth,
             skillshotRange: 1000,
             behindMargin: 0.5); // Margin = 0.5 < radius
-        
+
         // Should handle gracefully - either valid result or null
         if (result.HasValue)
         {
@@ -1109,7 +1109,7 @@ public class EdgeCaseRegressionTests
             Assert.True(result.Value.InterceptTime > 0.25);
         }
     }
-    
+
     /// <summary>
     /// Tests very large distances (50k+ units) with the Full Refinement solver.
     /// </summary>
@@ -1119,28 +1119,28 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(50_000, 0);
         var targetVel = new Vector2D(200, 100); // Moving diagonally
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 2000,
             castDelay: 0.5,
             skillshotRange: 100_000);
-        
+
         Assert.NotNull(result);
         Assert.False(double.IsNaN(result.Value));
         Assert.True(result.Value > 0.5); // Must be after cast delay
-        
+
         // Verify the solution is actually correct by checking residual
         var D = new Vector2D(targetPos.X, targetPos.Y);
         double t = result.Value;
         var futureTarget = D + targetVel * t;
         double distance = futureTarget.Length;
         double travelDistance = 2000 * (t - 0.5);
-        
+
         double residual = Math.Abs(distance - travelDistance);
         Assert.True(residual < 1e-6, $"Residual {residual} should be < 1e-6");
     }
-    
+
     /// <summary>
     /// Tests near-zero target velocity (just above MinVelocity threshold).
     /// </summary>
@@ -1151,29 +1151,29 @@ public class EdgeCaseRegressionTests
         var targetPos = new Point2D(500, 0);
         // Velocity just above MinVelocity threshold
         var nearZeroVel = new Vector2D(Constants.MinVelocity * 0.5, 0);
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, nearZeroVel,
             skillshotSpeed: 1500,
             castDelay: 0.25,
             skillshotRange: 1000);
-        
+
         Assert.NotNull(result);
-        
+
         // Should be very close to stationary case
         var stationaryResult = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, new Vector2D(0, 0),
             skillshotSpeed: 1500,
             castDelay: 0.25,
             skillshotRange: 1000);
-        
+
         Assert.NotNull(stationaryResult);
-        
+
         // Difference should be tiny
         double diff = Math.Abs(result.Value - stationaryResult.Value);
         Assert.True(diff < 0.01, $"Near-zero velocity result should be close to stationary. Diff: {diff}");
     }
-    
+
     /// <summary>
     /// Tests the RobustNewtonRaphson path with a difficult convergence case.
     /// Target moving tangentially at high speed creates challenging root-finding.
@@ -1185,28 +1185,28 @@ public class EdgeCaseRegressionTests
         var targetPos = new Point2D(400, 0);
         // High tangential velocity creates a challenging intercept geometry
         var targetVel = new Vector2D(50, 500); // Mostly perpendicular, very fast
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1800,
             castDelay: 0.15,
             skillshotRange: 1200);
-        
+
         Assert.NotNull(result);
         Assert.False(double.IsNaN(result.Value));
         Assert.True(result.Value > 0.15);
-        
+
         // Verify the intercept is valid
         var D = new Vector2D(targetPos.X, targetPos.Y);
         double t = result.Value;
         var futureTarget = D + targetVel * t;
         double distance = futureTarget.Length;
         double travelDistance = 1800 * (t - 0.15);
-        
+
         double residual = Math.Abs(distance - travelDistance);
         Assert.True(residual < 1e-3, $"Residual {residual} should be < 1e-3");
     }
-    
+
     /// <summary>
     /// Tests edge case where skillshot barely reaches target at max range.
     /// </summary>
@@ -1216,20 +1216,20 @@ public class EdgeCaseRegressionTests
         var casterPos = new Point2D(0, 0);
         var targetPos = new Point2D(980, 0); // Just inside 1000 range
         var targetVel = new Vector2D(-50, 0); // Moving slightly toward caster
-        
+
         var result = InterceptSolver.SolveInterceptTimeWithFullRefinement(
             casterPos, targetPos, targetVel,
             skillshotSpeed: 1500,
             castDelay: 0.25,
             skillshotRange: 1000);
-        
+
         Assert.NotNull(result);
-        
+
         // Verify intercept is within range
         double interceptDistance = 1500 * (result.Value - 0.25);
         Assert.True(interceptDistance <= 1000 + 1, // Allow tiny tolerance
             $"Intercept distance {interceptDistance} should be <= 1000");
     }
-    
+
     #endregion
 }

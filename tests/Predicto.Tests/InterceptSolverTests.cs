@@ -239,7 +239,7 @@ public class InterceptSolverTests
     }
 
     #endregion
- 
+
     #region Solver Unit Tests
 
 
@@ -1493,9 +1493,9 @@ public class InterceptSolverTests
         var (aimPoint, predictedPos, interceptTime, effectiveRadius) = result.Value;
 
         // Effective radius should be between hitbox and hitbox + width
-        Assert.True(effectiveRadius >= hitbox, 
+        Assert.True(effectiveRadius >= hitbox,
             $"EffectiveRadius ({effectiveRadius}) should be >= hitbox ({hitbox})");
-        Assert.True(effectiveRadius <= hitbox + width, 
+        Assert.True(effectiveRadius <= hitbox + width,
             $"EffectiveRadius ({effectiveRadius}) should be <= hitbox + width ({hitbox + width})");
 
         // Verify it's actually a hit

@@ -198,31 +198,31 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         double nsPerOp = (ms * 1_000_000.0) / iters;
         Console.WriteLine($"{label,-16}  {ms,10:F2} ms  {nsPerOp,10:F1} ns/op  found={found,7}  avg|res|={avgAbsResidual:F6}");
     }
-    
+
     // ========================================
     // BEHIND-TARGET METHOD COMPARISON
     // ========================================
     Console.WriteLine();
     Console.WriteLine("=== Behind-Target Method Comparison ===");
-    
+
     // Extended scenarios with hitbox and skillshot width for behind-target methods
     // Controlled via CLI args: --bench-width, --bench-width-mult, --bench-hitbox, --bench-margin
-    
+
     // Warmup for behind-target methods
     for (int i = 0; i < warmupIterations; i++)
     {
         var s = scenarios[i % scenarios.Length];
         var result1 = InterceptSolver.SolveBehindTargetWithFullRefinement(
-            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, 
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
             targetHitboxRadius, skillshotWidth, s.Range, margin);
         if (result1.HasValue) sink += result1.Value.InterceptTime;
-        
+
         var result2 = InterceptSolver.SolveBehindTargetDirect(
-            s.Caster, s.Target, s.Vel, s.Speed, s.Delay, 
+            s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
             targetHitboxRadius, skillshotWidth, s.Range, margin);
         if (result2.HasValue) sink += result2.Value.InterceptTime;
     }
-    
+
     // Measure FullRefinement method
     var swFullRef = Stopwatch.StartNew();
     int fullRefFound = 0;
@@ -244,7 +244,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
     swFullRef.Stop();
     double fullRefMs = swFullRef.Elapsed.TotalMilliseconds;
     double fullRefAvgResidual = fullRefFound > 0 ? fullRefResidualSum / fullRefFound : double.NaN;
-    
+
     // Measure Direct method
     var swDirect = Stopwatch.StartNew();
     int directFound = 0;
@@ -266,20 +266,20 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
     swDirect.Stop();
     double directMs = swDirect.Elapsed.TotalMilliseconds;
     double directAvgResidual = directFound > 0 ? directResidualSum / directFound : double.NaN;
-    
+
     Console.WriteLine($"Scenarios: {scenarioCount}, iterations: {measureIterations}");
     Console.WriteLine($"Target hitbox: {targetHitboxRadius}, Skillshot width: {skillshotWidth}, Margin: {margin}");
     Console.WriteLine($"Args: --bench-width {skillshotWidth} (or --bench-width-mult X)");
     Console.WriteLine();
-    
+
     double fullRefNsPerOp = (fullRefMs * 1_000_000.0) / measureIterations;
     double directNsPerOp = (directMs * 1_000_000.0) / measureIterations;
-    
+
     Console.WriteLine($"{"FullRefinement",-18}  {fullRefMs,10:F2} ms  {fullRefNsPerOp,10:F1} ns/op  found={fullRefFound,7}  avg|res|={fullRefAvgResidual:F9}");
     Console.WriteLine($"{"Direct",-18}  {directMs,10:F2} ms  {directNsPerOp,10:F1} ns/op  found={directFound,7}  avg|res|={directAvgResidual:F9}");
-    
+
     Console.WriteLine();
-    
+
     // Compare speed
     if (directMs < fullRefMs)
     {
@@ -293,7 +293,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         double slowerPct = (directMs - fullRefMs) / fullRefMs * 100.0;
         Console.WriteLine($"Direct vs FullRefinement: {slowdown:F3}x ({slowerPct:F2}% slower)");
     }
-    
+
     // Compare accuracy
     Console.WriteLine($"Accuracy comparison: FullRefinement avg residual = {fullRefAvgResidual:F12}, Direct avg residual = {directAvgResidual:F12}");
     if (directAvgResidual < fullRefAvgResidual)
@@ -302,30 +302,30 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         Console.WriteLine($"  -> FullRefinement is more accurate");
     else
         Console.WriteLine($"  -> Both methods have same accuracy");
-    
+
     // ========================================
     // HIT SIMULATION TEST
     // ========================================
     Console.WriteLine();
     Console.WriteLine("=== Hit Simulation Test (validates actual collision) ===");
-    
+
     int fullRefHits = 0, fullRefMisses = 0;
     int directHits = 0, directMisses = 0;
     double effectiveCollisionRadius = targetHitboxRadius + skillshotWidth / 2;
-    
+
     // Track max difference between methods
     double maxTimeDiff = 0;
     double maxAimDiff = 0;
-    
+
     for (int i = 0; i < scenarios.Length; i++)
     {
         var s = scenarios[i];
-        
+
         // Test FullRefinement method
         var fullRefResult = InterceptSolver.SolveBehindTargetWithFullRefinement(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
             targetHitboxRadius, skillshotWidth, s.Range, margin);
-        
+
         if (fullRefResult.HasValue)
         {
             double t = fullRefResult.Value.InterceptTime;
@@ -340,12 +340,12 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
             else
                 fullRefMisses++;
         }
-        
+
         // Test Direct method
         var directResult = InterceptSolver.SolveBehindTargetDirect(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay,
             targetHitboxRadius, skillshotWidth, s.Range, margin);
-        
+
         if (directResult.HasValue)
         {
             double t = directResult.Value.InterceptTime;
@@ -367,7 +367,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
                 }
             }
         }
-        
+
         // Compare results when both methods succeed
         if (fullRefResult.HasValue && directResult.HasValue)
         {
@@ -377,12 +377,12 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
             maxAimDiff = Math.Max(maxAimDiff, aimDiff);
         }
     }
-    
+
     Console.WriteLine($"FullRefinement: {fullRefHits} hits, {fullRefMisses} misses out of {fullRefHits + fullRefMisses} attempts ({100.0 * fullRefHits / (fullRefHits + fullRefMisses):F2}% hit rate)");
     Console.WriteLine($"Direct:         {directHits} hits, {directMisses} misses out of {directHits + directMisses} attempts ({100.0 * directHits / (directHits + directMisses):F2}% hit rate)");
     Console.WriteLine();
     Console.WriteLine($"Max difference between methods: time={maxTimeDiff:E3}s, aim={maxAimDiff:E3} units");
-    
+
     // Prevent dead-code elimination
     if (sink == double.MaxValue)
         Console.WriteLine("impossible sink");
@@ -928,10 +928,10 @@ while (!Raylib.WindowShouldClose())
             fireTime = 0f;
             skillshotLaunched = false;
             fireTargetStartPos = targetPos;
-            
+
             // Use the prediction's behind-target aim position directly
             fireAimPos = new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y);
-            
+
             skillshotDir = Vector2.Normalize(fireAimPos - casterPos);
             skillshotPos = casterPos;
             skillshotTrail.Clear();
@@ -1126,7 +1126,7 @@ while (!Raylib.WindowShouldClose())
         if (trailingEdgeResult is PredictionResult.Hit trailingHit && !isCircularMode && pathModeActive)
         {
             var trailingAim = new Vector2((float)trailingHit.CastPosition.X, (float)trailingHit.CastPosition.Y);
-            
+
             // Blue trailing edge aim point - smaller radius to not overlap with green
             Raylib.DrawCircleV(trailingAim, 6, new Color(80, 140, 255, 200));
             Raylib.DrawCircleLinesV(trailingAim, 8, new Color(100, 180, 255, 255));
@@ -1657,7 +1657,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         int legendY = ctrlY + 40;
         Raylib.DrawRectangle(10, legendY, 260, 60, new Color(0, 0, 0, 200));
         Raylib.DrawRectangleLines(10, legendY, 260, 60, new Color(80, 80, 100, 255));
-        
+
         Raylib.DrawTextEx(font, "PREDICTION LEGEND", new Vector2(20, legendY + 8), fontSize, spacing, Color.White);
         legendY += 26;
         // Green circle and text

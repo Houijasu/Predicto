@@ -342,7 +342,7 @@ public sealed class Ultimate : IPrediction
                 // Calculate if target can possibly be caught using accurate vector math
                 // Max time = (range + effectiveRadius) / skillshotSpeed + delay
                 double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
-                
+
                 // Compute exact future position using vector math instead of magnitude approximation
                 // This handles angled movement correctly
                 var futureTargetPos = input.TargetPosition + input.TargetVelocity * maxReachTime;

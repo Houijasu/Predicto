@@ -1385,14 +1385,14 @@ public sealed class InterceptSolver
         return t1;
     }
 
-     /// <summary>
-     /// Solves for center-to-center intercept time using quadratic formula
-     /// with Newton refinement for maximum precision.
-     /// 
-     /// Strategy:
-     /// 1. Use fast quadratic solver to get initial estimate
-     /// 2. Refine with Newton Method using an adaptive tolerance
-     /// </summary>
+    /// <summary>
+    /// Solves for center-to-center intercept time using quadratic formula
+    /// with Newton refinement for maximum precision.
+    /// 
+    /// Strategy:
+    /// 1. Use fast quadratic solver to get initial estimate
+    /// 2. Refine with Newton Method using an adaptive tolerance
+    /// </summary>
 
     public static double? SolveInterceptTimeWithSecantRefinement(
         Point2D casterPosition,
@@ -1632,11 +1632,11 @@ public sealed class InterceptSolver
         return clampedEstimate;
     }
 
-     /// <summary>
-     /// Solves for center-to-center intercept time using two-stage refinement:
-     /// 1. Quadratic formula - O(1) initial estimate
-     /// 2. RobustNewtonRaphson - Fast convergence with automatic bisection fallback
-     /// </summary>
+    /// <summary>
+    /// Solves for center-to-center intercept time using two-stage refinement:
+    /// 1. Quadratic formula - O(1) initial estimate
+    /// 2. RobustNewtonRaphson - Fast convergence with automatic bisection fallback
+    /// </summary>
     public static double? SolveInterceptTimeWithFullRefinement(
         Point2D casterPosition,
         Point2D targetPosition,
@@ -1929,7 +1929,7 @@ public sealed class InterceptSolver
         }
 
         Vector2D velocityUnit = targetVelocity.Normalize();
-        
+
         // Behind-point initial position: target position offset backwards along velocity
         // B₀ = T - r*V̂
         Point2D behindPointInitial = targetPosition + velocityUnit.Negate() * behindDistance;
@@ -1975,7 +1975,7 @@ public sealed class InterceptSolver
 
         // Calculate aim point (where the behind-point will be at time t)
         Point2D aimPoint = CalculatePredictedPosition(behindPointInitial, targetVelocity, t);
-        
+
         // Calculate predicted target position
         Point2D predictedTargetPos = CalculatePredictedPosition(targetPosition, targetVelocity, t);
 
@@ -1992,7 +1992,7 @@ public sealed class InterceptSolver
     /// 
     /// Algorithm:
     /// 1. Start with effectiveRadius = targetHitboxRadius + skillshotWidth/2 (standard collision)
-        /// 2. Use bisection on the half-width portion [0, skillshotWidth/2]
+    /// 2. Use bisection on the half-width portion [0, skillshotWidth/2]
     /// 3. Find the minimum effectiveRadius that still results in a hit
     /// 
     /// Example: hitbox=60, width=40
@@ -2011,7 +2011,7 @@ public sealed class InterceptSolver
     /// <param name="radiusTolerance">Convergence tolerance for radius bisection (default 0.5)</param>
     /// <param name="maxIterations">Maximum bisection iterations (default 20)</param>
     /// <returns>Aim point, predicted target position, intercept time, and optimal effectiveRadius; or null if unreachable</returns>
-    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)? 
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)?
         SolveBehindTargetWithRadiusBisection(
             Point2D casterPosition,
             Point2D targetPosition,
@@ -2050,7 +2050,7 @@ public sealed class InterceptSolver
         // widthMultiplier = 1 → effectiveRadius = hitbox + width/2 (maximum)
         double lowMultiplier = 0.0;
         double highMultiplier = 1.0;
-        
+
         // Track the best successful hit
         (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, double EffectiveRadius)? bestHit = null;
 
@@ -2074,7 +2074,7 @@ public sealed class InterceptSolver
         {
             double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
             double currentHalfWidth = (skillshotWidth / 2) * midMultiplier;
-            
+
             // Check convergence (in half-width units)
             if (currentHalfWidth < radiusTolerance || (highMultiplier - lowMultiplier) * (skillshotWidth / 2) < radiusTolerance)
                 break;
@@ -2153,7 +2153,7 @@ public sealed class InterceptSolver
 
         // Verify collision actually occurs with this radius
         double aimToTarget = (aimPoint - predictedTargetPos).Length;
-        
+
         // The aim point is behindDistance behind target, so separation should be ~behindDistance
         // A "hit" means the target center is within effectiveRadius of the aim point
         if (aimToTarget <= effectiveRadius)
@@ -2476,10 +2476,10 @@ public sealed class InterceptSolver
             var edgeResult = SolvePathEdgeIntercept(
                 casterPosition, path, skillshotSpeed, castDelay,
                 targetHitboxRadius, skillshotWidth, skillshotRange);
-            
+
             if (edgeResult == null)
                 return null;
-                
+
             return (edgeResult.Value, effectiveRadius);
         }
 
@@ -2488,7 +2488,7 @@ public sealed class InterceptSolver
         // widthMultiplier = 1 → effectiveRadius = hitbox + width/2 (maximum)
         double lowMultiplier = 0.0;
         double highMultiplier = 1.0;
-        
+
         (PathInterceptResult Result, double EffectiveRadius)? bestHit = null;
 
         // First, check if maximum radius hits
@@ -2507,7 +2507,7 @@ public sealed class InterceptSolver
         {
             double midMultiplier = (lowMultiplier + highMultiplier) / 2.0;
             double currentHalfWidth = (skillshotWidth / 2) * midMultiplier;
-            
+
             if (currentHalfWidth < radiusTolerance || (highMultiplier - lowMultiplier) * (skillshotWidth / 2) < radiusTolerance)
                 break;
 
