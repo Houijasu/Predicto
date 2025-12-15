@@ -1,5 +1,6 @@
 using MathNet.Spatial.Euclidean;
 using Predicto.Models;
+using Predicto.Physics;
 using Predicto.Solvers;
 
 namespace Predicto;
@@ -56,6 +57,451 @@ public sealed class Ultimate : IPrediction
         // === Velocity-Based Prediction (original logic) ===
         return PredictWithVelocity(input);
     }
+
+    #region Physics-Based Prediction (Least Action Principle)
+
+    // Lazy-initialized dodge simulator (avoids allocation if physics prediction not used)
+    private DodgeSimulator? _dodgeSimulator;
+    private DodgeSimulator DodgeSimulator => _dodgeSimulator ??= new DodgeSimulator();
+
+    /// <summary>
+    /// Predicts skillshot interception with physics-based dodge simulation.
+    /// Uses the Newtonian/Least Action approach to estimate how the target will react
+    /// to the incoming skillshot and adjusts the prediction accordingly.
+    /// 
+    /// This method:
+    /// 1. First computes the standard geometric prediction
+    /// 2. Simulates the target's dodge trajectory using potential field physics
+    /// 3. Returns enhanced result with dodge probability and adjusted confidence
+    /// </summary>
+    /// <param name="input">Standard prediction input</param>
+    /// <param name="dodgeProfile">Target's dodge behavior profile</param>
+    /// <returns>Physics-enhanced prediction result</returns>
+    public PhysicsHit? PredictWithPhysics(PredictionInput input, DodgeProfile dodgeProfile)
+    {
+        // Get base prediction first
+        var baseResult = Predict(input);
+
+        // If base prediction failed, return null (caller should check base prediction separately)
+        if (baseResult is not PredictionResult.Hit hit)
+            return null;
+
+        // Skip physics simulation for non-dodging profiles
+        if (dodgeProfile.SkillLevel < Constants.Epsilon)
+        {
+            return new PhysicsHit(
+                castPosition: hit.CastPosition,
+                predictedTargetPosition: hit.PredictedTargetPosition,
+                interceptTime: hit.InterceptTime,
+                confidence: hit.Confidence,
+                dodgeProbability: 0,
+                noDodgePosition: hit.PredictedTargetPosition,
+                dodgeDistance: 0);
+        }
+
+        // Create danger field for the skillshot
+        var direction = (hit.CastPosition - input.CasterPosition).Normalize();
+        var dangerField = new Physics.LinearDangerField(
+            input.CasterPosition,
+            direction,
+            input.Skillshot);
+
+        // Run dodge simulation
+        var simResult = DodgeSimulator.Simulate(
+            input.EffectivePosition,
+            input.EffectiveVelocity,
+            dangerField,
+            dodgeProfile,
+            goalPosition: null,
+            maxTime: hit.InterceptTime + 0.5);
+
+        // Calculate dodge probability
+        double dodgeProbability = DodgeSimulator.EstimateDodgeProbability(
+            input.EffectivePosition,
+            input.EffectiveVelocity,
+            input.CasterPosition,
+            input.Skillshot,
+            dodgeProfile);
+
+        // Calculate dodge distance
+        double dodgeDistance = (simResult.FinalPosition - hit.PredictedTargetPosition).Length;
+
+        return new PhysicsHit(
+            castPosition: hit.CastPosition,
+            predictedTargetPosition: simResult.WillCollide ? simResult.FinalPosition : hit.PredictedTargetPosition,
+            interceptTime: hit.InterceptTime,
+            confidence: hit.Confidence,
+            dodgeProbability: dodgeProbability,
+            noDodgePosition: hit.PredictedTargetPosition,
+            dodgeDistance: dodgeDistance);
+    }
+
+    /// <summary>
+    /// Predicts circular skillshot with physics-based dodge simulation.
+    /// </summary>
+    public PhysicsHit? PredictCircularWithPhysics(CircularPredictionInput input, DodgeProfile dodgeProfile)
+    {
+        var baseResult = PredictCircular(input);
+
+        if (baseResult is not PredictionResult.Hit hit)
+            return null;
+
+        if (dodgeProfile.SkillLevel < Constants.Epsilon)
+        {
+            return new PhysicsHit(
+                castPosition: hit.CastPosition,
+                predictedTargetPosition: hit.PredictedTargetPosition,
+                interceptTime: hit.InterceptTime,
+                confidence: hit.Confidence,
+                dodgeProbability: 0,
+                noDodgePosition: hit.PredictedTargetPosition,
+                dodgeDistance: 0);
+        }
+
+        // Create circular danger field
+        var dangerField = new Physics.CircularDangerField(hit.CastPosition, input.Skillshot);
+
+        // Run simulation
+        var simResult = DodgeSimulator.Simulate(
+            input.EffectivePosition,
+            input.EffectiveVelocity,
+            dangerField,
+            dodgeProfile,
+            goalPosition: null,
+            maxTime: input.Skillshot.Delay + 0.5);
+
+        // Estimate dodge probability based on escape result
+        double dodgeProbability = simResult.EscapedDanger
+            ? 0.5 + dodgeProfile.SkillLevel * 0.5
+            : dodgeProfile.SkillLevel * 0.2;
+
+        double dodgeDistance = (simResult.FinalPosition - hit.PredictedTargetPosition).Length;
+
+        return new PhysicsHit(
+            castPosition: hit.CastPosition,
+            predictedTargetPosition: simResult.WillCollide ? simResult.FinalPosition : hit.PredictedTargetPosition,
+            interceptTime: hit.InterceptTime,
+            confidence: hit.Confidence,
+            dodgeProbability: dodgeProbability,
+            noDodgePosition: hit.PredictedTargetPosition,
+            dodgeDistance: dodgeDistance);
+    }
+
+    /// <summary>
+    /// Simulates and returns the predicted dodge trajectory for visualization.
+    /// </summary>
+    /// <param name="targetPosition">Current target position</param>
+    /// <param name="targetVelocity">Current target velocity</param>
+    /// <param name="casterPosition">Skillshot origin</param>
+    /// <param name="skillshot">Skillshot parameters</param>
+    /// <param name="profile">Target's dodge profile</param>
+    /// <returns>Dodge simulation result</returns>
+    public DodgeSimulationResult SimulateDodge(
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        Point2D casterPosition,
+        LinearSkillshot skillshot,
+        DodgeProfile profile)
+    {
+        var direction = (targetPosition - casterPosition).Normalize();
+        var dangerField = new Physics.LinearDangerField(casterPosition, direction, skillshot);
+
+        return DodgeSimulator.Simulate(targetPosition, targetVelocity, dangerField, profile);
+    }
+
+
+    /// <summary>
+    /// Predicts skillshot interception using Least Action Principle (LAP) iterative refinement.
+    /// 
+    /// Unlike PredictWithPhysics (which estimates dodge probability post-hoc), this method:
+    /// 1. Simulates WHERE the target will dodge TO given a potential aim point
+    /// 2. Calculates the intercept point ON that dodge trajectory
+    /// 3. Iteratively refines until the aim point converges
+    /// 
+    /// This creates a "coupled" solution where our aim accounts for their dodge,
+    /// and their dodge accounts for our aim - finding the Nash equilibrium.
+    /// 
+    /// Algorithm:
+    /// 1. Get baseline prediction (assuming no dodge)
+    /// 2. Loop (max 3-5 iterations):
+    ///    a. Simulate target's dodge trajectory given current aim point
+    ///    b. Solve intercept on that dodge trajectory  
+    ///    c. If aim point moved less than tolerance, converged!
+    /// 3. Return LAP result with both baseline and LAP-adjusted predictions
+    /// </summary>
+    /// <param name="input">Standard prediction input</param>
+    /// <param name="dodgeProfile">Target's dodge behavior profile</param>
+    /// <param name="maxIterations">Maximum refinement iterations (default 3)</param>
+    /// <param name="convergenceTolerance">Position tolerance for convergence (default 5 units)</param>
+    /// <returns>LAP prediction result with adjusted aim point, or null if prediction fails</returns>
+    public LAPPredictionResult? PredictWithLAP(
+        PredictionInput input,
+        DodgeProfile dodgeProfile,
+        int maxIterations = 3,
+        double convergenceTolerance = 5.0)
+    {
+        // === Step 1: Get baseline prediction (no dodge) ===
+        var baseResult = Predict(input);
+        
+        if (baseResult is not PredictionResult.Hit baselineHit)
+            return null;
+
+        // Skip LAP for non-dodging profiles - return baseline wrapped as LAP result
+        if (dodgeProfile.SkillLevel < Constants.Epsilon)
+        {
+            return LAPPredictionResult.FromBaseline(baselineHit);
+        }
+
+        // Skip LAP for stationary targets - no dodge trajectory to predict
+        if (input.EffectiveVelocity.Length < Constants.MinVelocity)
+        {
+            return LAPPredictionResult.FromBaseline(baselineHit);
+        }
+
+        // === Step 2: Iterative refinement ===
+        Point2D currentAimPoint = baselineHit.CastPosition;
+        Point2D previousAimPoint = currentAimPoint;
+        DodgeTrajectory? lastTrajectory = null;
+        double interceptTime = baselineHit.InterceptTime;
+        Point2D predictedTargetPos = baselineHit.PredictedTargetPosition;
+        bool converged = false;
+        int iteration;
+
+        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+
+        for (iteration = 0; iteration < maxIterations; iteration++)
+        {
+            // === Step 2a: Create danger field pointing at current aim point ===
+            var aimDirection = (currentAimPoint - input.CasterPosition).Normalize();
+            var dangerField = new Physics.LinearDangerField(
+                input.CasterPosition,
+                aimDirection,
+                input.Skillshot);
+
+            // === Step 2b: Simulate dodge trajectory ===
+            var (simResult, trajectory) = DodgeSimulator.SimulateWithTrajectory(
+                input.EffectivePosition,
+                input.EffectiveVelocity,
+                dangerField,
+                dodgeProfile,
+                goalPosition: null,
+                maxTime: Math.Max(interceptTime + 0.5, DodgeSimulator.MaxSimulationTime),
+                dt: DodgeSimulator.DefaultTimeStep);
+
+            lastTrajectory = trajectory;
+
+            // === Step 2c: Solve intercept on dodge trajectory ===
+            var interceptResult = InterceptSolver.SolveBehindTargetOnTrajectory(
+                input.CasterPosition,
+                trajectory,
+                input.Skillshot.Speed,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                behindMargin: CalculateAdaptiveMargin(effectiveRadius));
+
+            if (!interceptResult.HasValue)
+            {
+                // No intercept on dodge trajectory - target escaped
+                // Return baseline with low confidence
+                return new LAPPredictionResult(
+                    castPosition: baselineHit.CastPosition,
+                    predictedTargetPosition: simResult.FinalPosition,
+                    interceptTime: baselineHit.InterceptTime,
+                    confidence: baselineHit.Confidence * 0.3, // Heavy penalty
+                    baselineCastPosition: baselineHit.CastPosition,
+                    baselinePredictedPosition: baselineHit.PredictedTargetPosition,
+                    iterationsUsed: iteration + 1,
+                    aimAdjustment: 0,
+                    converged: false,
+                    trajectory: lastTrajectory);
+            }
+
+            // Update aim point for next iteration
+            previousAimPoint = currentAimPoint;
+            currentAimPoint = interceptResult.Value.AimPoint;
+            predictedTargetPos = interceptResult.Value.TargetPosition;
+            interceptTime = interceptResult.Value.InterceptTime;
+
+            // === Step 2d: Check convergence ===
+            double aimShift = (currentAimPoint - previousAimPoint).Length;
+            if (aimShift < convergenceTolerance)
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        // === Step 3: Calculate final result ===
+        double aimAdjustment = (currentAimPoint - baselineHit.CastPosition).Length;
+
+        // Calculate confidence based on:
+        // - Base confidence from intercept solver
+        // - Convergence bonus/penalty
+        // - Dodge distance penalty
+        double baseConfidence = InterceptSolver.CalculateConfidence(
+            interceptTime,
+            (input.EffectivePosition - input.CasterPosition).Length,
+            input.EffectiveVelocity.Length,
+            input.Skillshot.Speed,
+            input.Skillshot.Range,
+            input.Skillshot.Delay);
+
+        // Convergence factor: 1.0 if converged, 0.8 if not
+        double convergenceFactor = converged ? 1.0 : 0.8;
+
+        // Adjustment penalty: large adjustments indicate high uncertainty
+        // Scale: 100+ unit adjustment → 0.5x confidence
+        double adjustmentFactor = 1.0 / (1.0 + aimAdjustment / 200.0);
+
+        double finalConfidence = baseConfidence * convergenceFactor * adjustmentFactor;
+
+        return new LAPPredictionResult(
+            castPosition: currentAimPoint,
+            predictedTargetPosition: predictedTargetPos,
+            interceptTime: interceptTime,
+            confidence: Math.Clamp(finalConfidence, Constants.Epsilon, 1.0),
+            baselineCastPosition: baselineHit.CastPosition,
+            baselinePredictedPosition: baselineHit.PredictedTargetPosition,
+            iterationsUsed: iteration + 1,
+            aimAdjustment: aimAdjustment,
+            converged: converged,
+            trajectory: lastTrajectory);
+    }
+
+    /// <summary>
+    /// Predicts circular skillshot interception using LAP iterative refinement.
+    /// </summary>
+    /// <param name="input">Circular prediction input</param>
+    /// <param name="dodgeProfile">Target's dodge behavior profile</param>
+    /// <param name="maxIterations">Maximum refinement iterations (default 3)</param>
+    /// <param name="convergenceTolerance">Position tolerance for convergence (default 5 units)</param>
+    /// <returns>LAP prediction result, or null if prediction fails</returns>
+    public LAPPredictionResult? PredictCircularWithLAP(
+        CircularPredictionInput input,
+        DodgeProfile dodgeProfile,
+        int maxIterations = 3,
+        double convergenceTolerance = 5.0)
+    {
+        // === Step 1: Get baseline prediction ===
+        var baseResult = PredictCircular(input);
+
+        if (baseResult is not PredictionResult.Hit baselineHit)
+            return null;
+
+        // Skip LAP for non-dodging profiles
+        if (dodgeProfile.SkillLevel < Constants.Epsilon)
+        {
+            return LAPPredictionResult.FromBaseline(baselineHit);
+        }
+
+        // Skip LAP for stationary targets
+        if (input.EffectiveVelocity.Length < Constants.MinVelocity)
+        {
+            return LAPPredictionResult.FromBaseline(baselineHit);
+        }
+
+        // === Step 2: Iterative refinement ===
+        Point2D currentCastPos = baselineHit.CastPosition;
+        Point2D previousCastPos = currentCastPos;
+        double effectiveRadius = input.Skillshot.Radius + input.TargetHitboxRadius;
+        bool converged = false;
+        int iteration;
+        Point2D predictedTargetPos = baselineHit.PredictedTargetPosition;
+
+        for (iteration = 0; iteration < maxIterations; iteration++)
+        {
+            // Create circular danger field at current cast position
+            var dangerField = new Physics.CircularDangerField(currentCastPos, input.Skillshot);
+
+            // Simulate dodge
+            var simResult = DodgeSimulator.Simulate(
+                input.EffectivePosition,
+                input.EffectiveVelocity,
+                dangerField,
+                dodgeProfile,
+                goalPosition: null,
+                maxTime: input.Skillshot.Delay + 0.5);
+
+            // For circular spells, the target position at detonation determines the cast
+            // We predict where they'll be on their dodge path at detonation time
+            predictedTargetPos = simResult.FinalPosition;
+
+            // Calculate behind-target cast position
+            var interceptResult = InterceptSolver.SolveCircularBehindTarget(
+                input.CasterPosition,
+                input.EffectivePosition, // Use original position for trajectory start
+                input.EffectiveVelocity,
+                input.Skillshot.Radius,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Range,
+                behindMargin: CalculateCircularAdaptiveMargin(effectiveRadius));
+
+            if (!interceptResult.HasValue)
+            {
+                // Fallback: aim at simulated final position
+                var dist = (simResult.FinalPosition - input.CasterPosition).Length;
+                if (dist > input.Skillshot.Range)
+                {
+                    return new LAPPredictionResult(
+                        castPosition: baselineHit.CastPosition,
+                        predictedTargetPosition: simResult.FinalPosition,
+                        interceptTime: input.Skillshot.Delay,
+                        confidence: baselineHit.Confidence * 0.3,
+                        baselineCastPosition: baselineHit.CastPosition,
+                        baselinePredictedPosition: baselineHit.PredictedTargetPosition,
+                        iterationsUsed: iteration + 1,
+                        aimAdjustment: 0,
+                        converged: false,
+                        trajectory: null);
+                }
+                currentCastPos = simResult.FinalPosition;
+            }
+            else
+            {
+                previousCastPos = currentCastPos;
+                currentCastPos = interceptResult.Value.CastPosition;
+                predictedTargetPos = interceptResult.Value.PredictedTargetPosition;
+            }
+
+            // Check convergence
+            double castShift = (currentCastPos - previousCastPos).Length;
+            if (castShift < convergenceTolerance)
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        // === Step 3: Calculate final result ===
+        double aimAdjustment = (currentCastPos - baselineHit.CastPosition).Length;
+
+        double baseConfidence = InterceptSolver.CalculateCircularConfidence(
+            input.Skillshot.Delay,
+            input.EffectiveVelocity.Length,
+            input.Skillshot.Radius,
+            input.TargetHitboxRadius);
+
+        double convergenceFactor = converged ? 1.0 : 0.8;
+        double adjustmentFactor = 1.0 / (1.0 + aimAdjustment / 200.0);
+        double finalConfidence = baseConfidence * convergenceFactor * adjustmentFactor;
+
+        return new LAPPredictionResult(
+            castPosition: currentCastPos,
+            predictedTargetPosition: predictedTargetPos,
+            interceptTime: input.Skillshot.Delay,
+            confidence: Math.Clamp(finalConfidence, Constants.Epsilon, 1.0),
+            baselineCastPosition: baselineHit.CastPosition,
+            baselinePredictedPosition: baselineHit.PredictedTargetPosition,
+            iterationsUsed: iteration + 1,
+            aimAdjustment: aimAdjustment,
+            converged: converged,
+            trajectory: null);
+    }
+
+    #endregion
 
     /// <summary>
     /// Prediction using pure trailing-edge aiming (no path-end blending).

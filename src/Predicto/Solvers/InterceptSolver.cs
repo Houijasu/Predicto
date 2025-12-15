@@ -3011,6 +3011,269 @@ public sealed class InterceptSolver
 
     #endregion
 
+    #region LAP Trajectory-Based Interception
+
+    /// <summary>
+    /// Solves for intercept on a sampled trajectory (from dodge simulation).
+    /// This enables LAP-based prediction where the target doesn't move linearly.
+    /// 
+    /// Uses binary search over time to find when skillshot reaches the trajectory.
+    /// </summary>
+    /// <param name="casterPosition">Position where the skillshot originates</param>
+    /// <param name="trajectory">Sampled dodge trajectory from DodgeSimulator</param>
+    /// <param name="skillshotSpeed">Speed of the skillshot (units/second)</param>
+    /// <param name="castDelay">Delay before skillshot launches (seconds)</param>
+    /// <param name="effectiveRadius">Target hitbox + skillshot width/2</param>
+    /// <param name="skillshotRange">Maximum range of the skillshot</param>
+    /// <returns>Intercept result or null if no valid interception exists</returns>
+    public static (Point2D AimPoint, Point2D TargetPosition, double InterceptTime)? SolveInterceptOnTrajectory(
+        Point2D casterPosition,
+        DodgeTrajectory trajectory,
+        double skillshotSpeed,
+        double castDelay,
+        double effectiveRadius,
+        double skillshotRange)
+    {
+        if (trajectory.Count < 2)
+            return null;
+
+        double maxTime = trajectory.Duration;
+        double minTime = castDelay;
+
+        // The intercept equation on a trajectory:
+        // At time t: target is at trajectory.GetPositionAt(t)
+        // Skillshot reaches distance d from caster in time: castDelay + d/skillshotSpeed
+        // 
+        // We need to find t where:
+        // |trajectory.GetPositionAt(t) - caster| = skillshotSpeed * (t - castDelay) + effectiveRadius
+        // 
+        // Or equivalently, distance to aim point = skillshot travel distance
+
+        // Binary search approach: find first time where collision function <= 0
+        // f(t) = |target(t) - caster| - effectiveRadius - skillshotSpeed * max(0, t - castDelay)
+        
+        double EvaluateTrajectoryCollision(double t)
+        {
+            if (t < 0) return double.MaxValue;
+            
+            Point2D targetPos = trajectory.GetPositionAt(t);
+            double distanceToCaster = (targetPos - casterPosition).Length;
+            double flightTime = Math.Max(0, t - castDelay);
+            double projectileReach = skillshotSpeed * flightTime + effectiveRadius;
+            
+            return distanceToCaster - projectileReach;
+        }
+
+        // Check if already in range at start
+        double fMin = EvaluateTrajectoryCollision(minTime);
+        if (fMin <= 0)
+        {
+            Point2D targetAtMin = trajectory.GetPositionAt(minTime);
+            double distAtMin = (targetAtMin - casterPosition).Length;
+            if (distAtMin <= skillshotRange)
+            {
+                return (targetAtMin, targetAtMin, minTime);
+            }
+        }
+
+        // Check if ever in range
+        double fMax = EvaluateTrajectoryCollision(maxTime);
+        if (fMin > 0 && fMax > 0)
+        {
+            // Check if there's a minimum in between (target comes closer then moves away)
+            // Sample at intervals to find potential crossing
+            double bestTime = -1;
+            double bestF = double.MaxValue;
+            int samples = Math.Min(100, trajectory.Count);
+            
+            for (int i = 0; i <= samples; i++)
+            {
+                double t = minTime + (maxTime - minTime) * i / samples;
+                double f = EvaluateTrajectoryCollision(t);
+                if (f < bestF)
+                {
+                    bestF = f;
+                    bestTime = t;
+                }
+                if (f <= 0)
+                {
+                    // Found a crossing, refine with bisection
+                    double tLow = i > 0 ? minTime + (maxTime - minTime) * (i - 1) / samples : minTime;
+                    double tHigh = t;
+                    
+                    for (int iter = 0; iter < 20; iter++)
+                    {
+                        double tMid = (tLow + tHigh) / 2;
+                        double fMid = EvaluateTrajectoryCollision(tMid);
+                        if (fMid <= 0)
+                            tHigh = tMid;
+                        else
+                            tLow = tMid;
+                    }
+                    
+                    Point2D targetPos = trajectory.GetPositionAt(tHigh);
+                    double dist = (targetPos - casterPosition).Length;
+                    if (dist <= skillshotRange + effectiveRadius)
+                    {
+                        return (targetPos, targetPos, tHigh);
+                    }
+                    return null;
+                }
+            }
+            
+            // No crossing found
+            return null;
+        }
+
+        // Binary search for crossing point
+        double low = minTime;
+        double high = maxTime;
+        
+        // Find bracket where sign changes
+        if (fMin > 0 && fMax <= 0)
+        {
+            // f changes from positive to negative
+            for (int iter = 0; iter < 50; iter++)
+            {
+                double mid = (low + high) / 2;
+                double fMid = EvaluateTrajectoryCollision(mid);
+                
+                if (Math.Abs(fMid) < 0.1) // Close enough
+                {
+                    Point2D targetPos = trajectory.GetPositionAt(mid);
+                    double dist = (targetPos - casterPosition).Length;
+                    if (dist <= skillshotRange + effectiveRadius)
+                    {
+                        return (targetPos, targetPos, mid);
+                    }
+                    return null;
+                }
+                
+                if (fMid > 0)
+                    low = mid;
+                else
+                    high = mid;
+            }
+            
+            // Return best estimate
+            double finalTime = (low + high) / 2;
+            Point2D finalTargetPos = trajectory.GetPositionAt(finalTime);
+            double finalDist = (finalTargetPos - casterPosition).Length;
+            if (finalDist <= skillshotRange + effectiveRadius)
+            {
+                return (finalTargetPos, finalTargetPos, finalTime);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Solves for behind-target intercept on a sampled trajectory.
+    /// Aims behind the target's predicted position on their dodge path.
+    /// </summary>
+    public static (Point2D AimPoint, Point2D TargetPosition, double InterceptTime)? SolveBehindTargetOnTrajectory(
+        Point2D casterPosition,
+        DodgeTrajectory trajectory,
+        double skillshotSpeed,
+        double castDelay,
+        double targetHitboxRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double behindMargin = 1.0)
+    {
+        if (trajectory.Count < 2)
+            return null;
+
+        double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
+        double maxMargin = effectiveRadius > 1.0 ? effectiveRadius - 1.0 : effectiveRadius * 0.9;
+        behindMargin = Math.Clamp(behindMargin, Constants.Epsilon, Math.Max(Constants.Epsilon, maxMargin));
+        double behindDistance = effectiveRadius - behindMargin;
+
+        double maxTime = trajectory.Duration;
+        double minTime = castDelay;
+
+        // Similar to regular intercept, but we aim behind the target
+        // The aim point is: targetPos - moveDirection * behindDistance
+        // where moveDirection is the target's velocity direction at that time
+
+        double EvaluateBehindCollision(double t, out Point2D aimPoint)
+        {
+            aimPoint = default;
+            if (t < 0) return double.MaxValue;
+
+            Point2D targetPos = trajectory.GetPositionAt(t);
+            Vector2D velocity = trajectory.GetVelocityAt(t);
+
+            // If stationary, aim at center
+            if (velocity.Length < Constants.MinVelocity)
+            {
+                aimPoint = targetPos;
+            }
+            else
+            {
+                Vector2D moveDir = velocity.Normalize();
+                aimPoint = targetPos - moveDir * behindDistance;
+            }
+
+            double distanceToAim = (aimPoint - casterPosition).Length;
+            double flightTime = Math.Max(0, t - castDelay);
+            double projectileReach = skillshotSpeed * flightTime;
+
+            return distanceToAim - projectileReach;
+        }
+
+        // Sample to find crossing
+        int samples = Math.Min(100, trajectory.Count);
+        Point2D bestAim = default;
+        double crossingTime = -1;
+
+        for (int i = 0; i <= samples; i++)
+        {
+            double t = minTime + (maxTime - minTime) * i / samples;
+            double f = EvaluateBehindCollision(t, out Point2D aim);
+
+            if (f <= 0)
+            {
+                // Found potential crossing, refine
+                double tLow = i > 0 ? minTime + (maxTime - minTime) * (i - 1) / samples : minTime;
+                double tHigh = t;
+
+                for (int iter = 0; iter < 20; iter++)
+                {
+                    double tMid = (tLow + tHigh) / 2;
+                    double fMid = EvaluateBehindCollision(tMid, out Point2D midAim);
+                    if (fMid <= 0)
+                    {
+                        tHigh = tMid;
+                        bestAim = midAim;
+                    }
+                    else
+                    {
+                        tLow = tMid;
+                    }
+                }
+
+                crossingTime = tHigh;
+                EvaluateBehindCollision(crossingTime, out bestAim);
+                break;
+            }
+        }
+
+        if (crossingTime < 0)
+            return null;
+
+        // Validate range
+        double aimDist = (bestAim - casterPosition).Length;
+        if (aimDist > skillshotRange)
+            return null;
+
+        Point2D targetAtIntercept = trajectory.GetPositionAt(crossingTime);
+        return (bestAim, targetAtIntercept, crossingTime);
+    }
+
+    #endregion
+
     #region Circular Skillshot (Ground-Targeted)
 
     /// <summary>

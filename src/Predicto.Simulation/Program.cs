@@ -4,6 +4,7 @@ using System.Numerics;
 using MathNet.Spatial.Euclidean;
 using Predicto;
 using Predicto.Models;
+using Predicto.Physics;
 using Predicto.Solvers;
 using Raylib_cs;
 
@@ -457,6 +458,20 @@ float pathTotalTime = 0f;  // Total time elapsed on path during continuous firin
 // Prediction result
 PredictionResult? ultimateResult = null;
 PredictionResult? trailingEdgeResult = null;  // Pure trailing-edge prediction for comparison
+PhysicsHit? physicsResult = null;  // Physics-based prediction with dodge probability
+LAPPredictionResult? lapResult = null;  // LAP iterative refinement with dodge trajectory
+
+// LAP dodge profile presets
+var dodgeProfiles = new (string Name, DodgeProfile Profile)[]
+{
+    ("None", DodgeProfile.None),
+    ("Beginner", DodgeProfile.Beginner),
+    ("Average", DodgeProfile.Average),
+    ("Skilled", DodgeProfile.Skilled),
+    ("Expert", DodgeProfile.Expert),
+};
+int currentDodgeProfile = 2;  // Start with Average
+bool showLapPrediction = true;  // Toggle LAP visualization
 
 // Collision info for display
 Vector2 collisionPos = Vector2.Zero;
@@ -545,6 +560,10 @@ while (!Raylib.WindowShouldClose())
     if (Raylib.IsKeyPressed(KeyboardKey.Three)) currentTimeIndex = 2;
     if (Raylib.IsKeyPressed(KeyboardKey.Four)) currentTimeIndex = 3;
     if (Raylib.IsKeyPressed(KeyboardKey.Five)) currentTimeIndex = 4;
+
+    // LAP toggle (L key) and dodge profile cycling (P key)
+    if (Raylib.IsKeyPressed(KeyboardKey.L)) showLapPrediction = !showLapPrediction;
+    if (Raylib.IsKeyPressed(KeyboardKey.P)) currentDodgeProfile = (currentDodgeProfile + 1) % dodgeProfiles.Length;
 
     // Time button click detection
     if (Raylib.IsMouseButtonPressed(MouseButton.Left))
@@ -651,6 +670,12 @@ while (!Raylib.WindowShouldClose())
 
         ultimateResult = ultimate.PredictCircular(circularInput);
         trailingEdgeResult = ultimateResult;  // Circular doesn't have blending yet, same result
+
+        // Physics-based prediction with dodge probability
+        physicsResult = ultimate.PredictCircularWithPhysics(circularInput, dodgeProfiles[currentDodgeProfile].Profile);
+
+        // LAP iterative refinement - adjusts aim point based on predicted dodge
+        lapResult = ultimate.PredictCircularWithLAP(circularInput, dodgeProfiles[currentDodgeProfile].Profile);
     }
     else
     {
@@ -723,6 +748,12 @@ while (!Raylib.WindowShouldClose())
 
         ultimateResult = ultimate.Predict(input);
         trailingEdgeResult = ultimate.PredictPureTrailingEdge(input);
+
+        // Physics-based prediction with dodge probability
+        physicsResult = ultimate.PredictWithPhysics(input, dodgeProfiles[currentDodgeProfile].Profile);
+
+        // LAP iterative refinement - adjusts aim point based on predicted dodge trajectory
+        lapResult = ultimate.PredictWithLAP(input, dodgeProfiles[currentDodgeProfile].Profile);
     }
 
     // Stop continuous firing with Escape
@@ -1134,6 +1165,73 @@ while (!Raylib.WindowShouldClose())
             Raylib.DrawLineEx(targetPos, trailingAim, 1.5f, new Color(80, 140, 255, 150));
         }
 
+        // Draw LAP (iterative refinement) prediction - magenta/purple color
+        if (showLapPrediction && lapResult != null)
+        {
+            var lapPredicted = new Vector2((float)lapResult.PredictedTargetPosition.X, (float)lapResult.PredictedTargetPosition.Y);
+            var baselinePredicted = new Vector2((float)lapResult.BaselinePredictedPosition.X, (float)lapResult.BaselinePredictedPosition.Y);
+
+            // Draw full dodge trajectory if available
+            if (lapResult.Trajectory != null)
+            {
+                var trajectory = lapResult.Trajectory.Value;
+                if (trajectory.Count > 1)
+                {
+                    // Draw trajectory as connected line segments
+                    for (int i = 0; i < trajectory.Count - 1; i++)
+                    {
+                        var p0 = trajectory.Positions[i];
+                        var p1 = trajectory.Positions[i + 1];
+                        var start = new Vector2((float)p0.X, (float)p0.Y);
+                        var end = new Vector2((float)p1.X, (float)p1.Y);
+
+                        // Fade color along trajectory
+                        byte alpha = (byte)(255 - (i * 200 / trajectory.Count));
+                        Raylib.DrawLineEx(start, end, 2, new Color((byte)255, (byte)100, (byte)255, alpha));
+                    }
+
+                    // Draw small dots at sample points
+                    for (int i = 0; i < trajectory.Count; i += 3)
+                    {
+                        var p = trajectory.Positions[i];
+                        Raylib.DrawCircleV(new Vector2((float)p.X, (float)p.Y), 2, new Color(255, 150, 255, 150));
+                    }
+                }
+            }
+            else
+            {
+                // Fallback: draw dashed line from baseline to LAP predicted position
+                float dodgeDist = Vector2.Distance(lapPredicted, baselinePredicted);
+                if (dodgeDist > 5)
+                {
+                    var dodgeDir = Vector2.Normalize(lapPredicted - baselinePredicted);
+                    int segments = (int)(dodgeDist / 15);
+                    for (int i = 0; i < segments; i += 2)
+                    {
+                        var segStart = baselinePredicted + dodgeDir * i * 15;
+                        var segEnd = baselinePredicted + dodgeDir * Math.Min((i + 1) * 15, dodgeDist);
+                        Raylib.DrawLineEx(segStart, segEnd, 2, new Color(255, 100, 255, 150));
+                    }
+                }
+            }
+
+            // Only draw prediction markers if there's meaningful aim adjustment
+            if (lapResult.AimAdjustment > 5)
+            {
+                // LAP predicted position (where target will dodge to) - magenta
+                Raylib.DrawCircleV(lapPredicted, targetHitbox * 0.4f, new Color(255, 100, 255, 120));
+                Raylib.DrawCircleLinesV(lapPredicted, targetHitbox * 0.6f, new Color(255, 100, 255, 220));
+
+                // Small marker at baseline position for reference
+                Raylib.DrawCircleLinesV(baselinePredicted, targetHitbox * 0.25f, new Color(255, 100, 255, 100));
+
+                // Draw LAP aim point (different from baseline)
+                var lapAim = new Vector2((float)lapResult.CastPosition.X, (float)lapResult.CastPosition.Y);
+                DrawDiamond(lapAim, 10, new Color(255, 100, 255, 200));
+                Raylib.DrawCircleLinesV(lapAim, 12, new Color(255, 150, 255, 150));
+            }
+        }
+
         // Then draw current prediction (green) - on top
         if (ultimateResult is PredictionResult.Hit ultimateHit2)
         {
@@ -1306,10 +1404,11 @@ while (!Raylib.WindowShouldClose())
     string currentPresetName = isCircularMode
         ? circularPresets[currentCircularPreset].Name
         : linearPresets[currentLinearPreset].Name;
-    DrawUI(font, ultimateResult, targetSpeed, skillshotSpeed, skillshotRange,
+    DrawUI(font, ultimateResult, lapResult, targetSpeed, skillshotSpeed, skillshotRange,
            skillshotRadius, skillshotDelay, isCircularMode,
            currentPresetName, hitCount, missCount, camera.Zoom,
-           timeLabels, currentTimeIndex, pathModeActive, waypoints.Count);
+           timeLabels, currentTimeIndex, pathModeActive, waypoints.Count,
+           showLapPrediction, dodgeProfiles[currentDodgeProfile].Name);
 
     // Collision info overlay
     if (collisionDisplayTimer > 0)
@@ -1485,6 +1584,19 @@ static void DrawArrow(Vector2 start, Vector2 end, Color color)
     Raylib.DrawTriangle(end, p1, p2, color);
 }
 
+static void DrawDiamond(Vector2 center, float size, Color color)
+{
+    var top = center + new Vector2(0, -size);
+    var right = center + new Vector2(size, 0);
+    var bottom = center + new Vector2(0, size);
+    var left = center + new Vector2(-size, 0);
+
+    Raylib.DrawTriangle(top, right, center, color);
+    Raylib.DrawTriangle(right, bottom, center, color);
+    Raylib.DrawTriangle(bottom, left, center, color);
+    Raylib.DrawTriangle(left, top, center, color);
+}
+
 static void DrawLinearSkillshot(Vector2 center, Vector2 direction, float width, float length, Color color)
 {
     var perp = new Vector2(-direction.Y, direction.X);
@@ -1534,11 +1646,12 @@ static void DrawLinearSkillshotOutline(Vector2 center, Vector2 direction, float 
     Raylib.DrawLineEx(p2, tip, 2, color);
 }
 
-static void DrawUI(Font font, PredictionResult? ultimateResult,
+static void DrawUI(Font font, PredictionResult? ultimateResult, LAPPredictionResult? lapResult,
                   float targetSpeed, float skillshotSpeed, float skillshotRange,
                   float skillshotRadius, float skillshotDelay, bool isCircularMode,
                   string presetName, int hits, int misses, float zoom,
-                  string[] timeLabels, int currentTimeIndex, bool pathModeActive, int waypointCount)
+                  string[] timeLabels, int currentTimeIndex, bool pathModeActive, int waypointCount,
+                  bool showLapPrediction, string dodgeProfileName)
 {
     int y = 20;
     int lineHeight = 26;
@@ -1547,9 +1660,9 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     int smallFont = 16;
     float spacing = 1f;
 
-    // Main panel
-    Raylib.DrawRectangle(10, 10, 420, 200, new Color(0, 0, 0, 200));
-    Raylib.DrawRectangleLines(10, 10, 420, 200, new Color(255, 215, 0, 255));
+    // Main panel - expanded to fit LAP info
+    Raylib.DrawRectangle(10, 10, 420, 230, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, 10, 420, 230, new Color(255, 215, 0, 255));
 
     Raylib.DrawTextEx(font, "ULTIMATE", new Vector2(20, y), titleSize, spacing, new Color(255, 215, 0, 255));
     Raylib.DrawTextEx(font, "Behind-Edge Prediction", new Vector2(130, y + 4), fontSize, spacing, Color.White);
@@ -1599,6 +1712,30 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     {
         Raylib.DrawTextEx(font, "UNREACHABLE", new Vector2(20, y), fontSize, spacing, Color.Red);
     }
+    y += lineHeight + 4;
+
+    // LAP (Physics) prediction info
+    var lapColor = showLapPrediction ? new Color(255, 100, 255, 255) : new Color(100, 100, 100, 255);
+    var lapLabel = showLapPrediction ? "[LAP ON]" : "[LAP OFF]";
+    Raylib.DrawTextEx(font, $"{lapLabel} Profile: {dodgeProfileName}", new Vector2(20, y), smallFont, spacing, lapColor);
+    y += lineHeight - 4;
+
+    if (showLapPrediction && lapResult != null)
+    {
+        var aimAdjust = lapResult.AimAdjustment;
+        var conf = lapResult.Confidence;
+        var iters = lapResult.IterationsUsed;
+        var converged = lapResult.Converged;
+
+        // Color based on aim adjustment - larger adjustments indicate more dodging
+        var adjustColor = aimAdjust < 30 ? Color.Green : aimAdjust < 80 ? Color.Yellow : Color.Red;
+        var convText = converged ? "Y" : "N";
+        Raylib.DrawTextEx(font, $"Adjust: {aimAdjust:F0}  Conf: {conf:P0}  Iter: {iters} Conv: {convText}", new Vector2(20, y), smallFont, spacing, adjustColor);
+    }
+    else
+    {
+        Raylib.DrawTextEx(font, "L: Toggle LAP  |  P: Cycle profile", new Vector2(20, y), smallFont, spacing, Color.DarkGray);
+    }
 
     // Fire panel (right side)
     int rx = ScreenWidth - 200;
@@ -1634,10 +1771,10 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
             isSelected ? Color.Black : Color.LightGray);
     }
 
-    // Controls panel
-    int ctrlY = 220;
-    Raylib.DrawRectangle(10, ctrlY, 420, 155, new Color(0, 0, 0, 200));
-    Raylib.DrawRectangleLines(10, ctrlY, 420, 155, new Color(80, 80, 100, 255));
+    // Controls panel - adjusted position
+    int ctrlY = 250;
+    Raylib.DrawRectangle(10, ctrlY, 420, 180, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, ctrlY, 420, 180, new Color(80, 80, 100, 255));
 
     Raylib.DrawTextEx(font, "CONTROLS", new Vector2(20, ctrlY + 8), fontSize, spacing, Color.White);
     ctrlY += 28;
@@ -1650,21 +1787,28 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     Raylib.DrawTextEx(font, "TAB : Cycle presets  |  ` : Toggle mode", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
     ctrlY += lineHeight;
     Raylib.DrawTextEx(font, "Q/W : Target speed  |  E/R : Projectile speed", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
+    ctrlY += lineHeight;
+    Raylib.DrawTextEx(font, "L : Toggle LAP  |  P : Cycle dodge profile", new Vector2(20, ctrlY), smallFont, spacing, new Color(255, 100, 255, 255));
 
-    // Prediction legend (only show for linear mode with path)
+    // Prediction legend
+    int legendY = ctrlY + 35;
+    Raylib.DrawRectangle(10, legendY, 420, 75, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, legendY, 420, 75, new Color(80, 80, 100, 255));
+
+    Raylib.DrawTextEx(font, "PREDICTION LEGEND", new Vector2(20, legendY + 8), fontSize, spacing, Color.White);
+    legendY += 26;
+    // Green circle - baseline
+    Raylib.DrawCircleV(new Vector2(30, legendY + 8), 6, new Color(80, 255, 120, 220));
+    Raylib.DrawTextEx(font, "Baseline", new Vector2(45, legendY), smallFont, spacing, new Color(80, 255, 120, 255));
+    // Magenta circle - LAP
+    Raylib.DrawCircleV(new Vector2(130, legendY + 8), 6, new Color(255, 100, 255, 220));
+    Raylib.DrawTextEx(font, "LAP (dodge)", new Vector2(145, legendY), smallFont, spacing, new Color(255, 100, 255, 255));
+    // Blue circle - trailing
     if (!isCircularMode && pathModeActive)
     {
-        int legendY = ctrlY + 40;
-        Raylib.DrawRectangle(10, legendY, 260, 60, new Color(0, 0, 0, 200));
-        Raylib.DrawRectangleLines(10, legendY, 260, 60, new Color(80, 80, 100, 255));
-
-        Raylib.DrawTextEx(font, "PREDICTION LEGEND", new Vector2(20, legendY + 8), fontSize, spacing, Color.White);
-        legendY += 26;
-        // Green circle and text
-        Raylib.DrawCircleV(new Vector2(30, legendY + 8), 6, new Color(80, 255, 120, 220));
-        Raylib.DrawTextEx(font, "Blended (path-aware)", new Vector2(45, legendY), smallFont, spacing, new Color(80, 255, 120, 255));
-        // Blue circle and text
-        Raylib.DrawCircleV(new Vector2(160, legendY + 8), 5, new Color(80, 140, 255, 220));
-        Raylib.DrawTextEx(font, "Trailing", new Vector2(175, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
+        Raylib.DrawCircleV(new Vector2(250, legendY + 8), 5, new Color(80, 140, 255, 220));
+        Raylib.DrawTextEx(font, "Trailing", new Vector2(265, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
     }
+    legendY += lineHeight;
+    Raylib.DrawTextEx(font, "Magenta dashed line = predicted dodge trajectory", new Vector2(20, legendY), smallFont - 2, spacing, new Color(255, 100, 255, 180));
 }

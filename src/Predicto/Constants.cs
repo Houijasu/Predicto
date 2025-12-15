@@ -176,4 +176,56 @@ public static class Constants
         double t = Math.Clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
         return t * t * (3.0 - 2.0 * t);
     }
+
+    #region Physics Simulation Constants (Least Action Principle)
+
+    /// <summary>
+    /// Default danger amplitude for potential fields.
+    /// This is the peak "danger value" at the center of a skillshot path.
+    /// Higher values cause stronger dodge responses.
+    /// </summary>
+    public const double DefaultDangerAmplitude = 1000.0;
+
+    /// <summary>
+    /// Danger falloff multiplier relative to skillshot width.
+    /// FalloffWidth = SkillshotWidth * DangerFalloffMultiplier.
+    /// Larger values create wider danger zones.
+    /// </summary>
+    public const double DangerFalloffMultiplier = 2.0;
+
+    /// <summary>
+    /// Maximum acceleration for dodge maneuvers (units/second²).
+    /// Based on typical champion turn rates in League of Legends.
+    /// Champions can change direction very quickly, approximately
+    /// reaching max speed in ~0.1-0.2 seconds.
+    /// </summary>
+    public const double MaxDodgeAcceleration = 3000.0;
+
+    /// <summary>
+    /// Default friction coefficient for physics simulation.
+    /// Controls how quickly a target decelerates when not actively moving.
+    /// Higher values = faster stopping.
+    /// </summary>
+    public const double DefaultFriction = 5.0;
+
+    /// <summary>
+    /// Time step for physics simulation (seconds).
+    /// Smaller values are more accurate but slower.
+    /// 1/60 second provides good balance of accuracy and performance.
+    /// </summary>
+    public const double PhysicsTimeStep = 1.0 / 60.0;
+
+    /// <summary>
+    /// Maximum physics simulation time (seconds).
+    /// Prevents runaway simulations.
+    /// </summary>
+    public const double MaxPhysicsSimulationTime = 2.0;
+
+    /// <summary>
+    /// Danger potential threshold below which a position is considered safe.
+    /// Used to determine when a dodge simulation can terminate early.
+    /// </summary>
+    public const double SafetyPotentialThreshold = 10.0;
+
+    #endregion
 }
