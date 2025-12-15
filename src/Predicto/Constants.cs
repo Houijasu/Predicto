@@ -83,6 +83,12 @@ public static class Constants
     public const double AverageReactionTime = 0.25;
 
     /// <summary>
+    /// Human reaction time used for dodge prediction calculations.
+    /// Alias for AverageReactionTime for clarity in Least Action solver.
+    /// </summary>
+    public const double HumanReactionTime = AverageReactionTime;
+
+    /// <summary>
     /// Minimum possible human reaction time (elite performance) in seconds.
     /// Professional esports players can achieve 150-180ms in optimal conditions.
     /// </summary>

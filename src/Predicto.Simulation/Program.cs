@@ -473,6 +473,11 @@ var dodgeProfiles = new (string Name, DodgeProfile Profile)[]
 int currentDodgeProfile = 2;  // Start with Average
 bool showLapPrediction = true;  // Toggle LAP visualization
 
+// Least Action predictions (different colored circles)
+LeastActionSolver.LeastActionResult? inertiaResult = null;      // Purple - inertia-weighted
+LeastActionSolver.LeastActionResult? dodgeAwareResult = null;   // Orange - dodge prediction
+LeastActionSolver.LeastActionResult? optimalResult = null;      // Cyan - optimal intercept
+
 // Collision info for display
 Vector2 collisionPos = Vector2.Zero;
 float collisionTime = 0f;
@@ -676,6 +681,11 @@ while (!Raylib.WindowShouldClose())
 
         // LAP iterative refinement - adjusts aim point based on predicted dodge
         lapResult = ultimate.PredictCircularWithLAP(circularInput, dodgeProfiles[currentDodgeProfile].Profile);
+
+        // Clear Least Action predictions for circular mode (not implemented for circular)
+        inertiaResult = null;
+        dodgeAwareResult = null;
+        optimalResult = null;
     }
     else
     {
@@ -754,6 +764,42 @@ while (!Raylib.WindowShouldClose())
 
         // LAP iterative refinement - adjusts aim point based on predicted dodge trajectory
         lapResult = ultimate.PredictWithLAP(input, dodgeProfiles[currentDodgeProfile].Profile);
+
+        // Compute Least Action predictions for linear skillshots
+        var casterPt = new Point2D(casterPos.X, casterPos.Y);
+        var targetPt = new Point2D(targetPos.X, targetPos.Y);
+        var targetVel = new Vector2D(targetVelocity.X * targetSpeed, targetVelocity.Y * targetSpeed);
+
+        if (input.HasPath && input.TargetPath != null)
+        {
+            // Path-based Least Action predictions
+            inertiaResult = LeastActionSolver.SolveInertiaWeightedWithPath(
+                casterPt, input.TargetPath, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+
+            dodgeAwareResult = LeastActionSolver.SolveDodgeAwareWithPath(
+                casterPt, input.TargetPath, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+
+            optimalResult = LeastActionSolver.SolveOptimalInterceptWithPath(
+                casterPt, input.TargetPath, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+        }
+        else
+        {
+            // Velocity-based Least Action predictions
+            inertiaResult = LeastActionSolver.SolveInertiaWeighted(
+                casterPt, targetPt, targetVel, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+
+            dodgeAwareResult = LeastActionSolver.SolveDodgeAware(
+                casterPt, targetPt, targetVel, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+
+            optimalResult = LeastActionSolver.SolveOptimalIntercept(
+                casterPt, targetPt, targetVel, skillshotSpeed, skillshotDelay,
+                targetHitbox, skillshotWidth, skillshotRange);
+        }
     }
 
     // Stop continuous firing with Escape
@@ -1262,6 +1308,56 @@ while (!Raylib.WindowShouldClose())
                 Raylib.DrawCircleV(ultimateAim, 12, new Color(80, 255, 120, 220));
                 Raylib.DrawCircleLinesV(ultimateAim, 14, Color.White);
                 Raylib.DrawLineEx(targetPos, ultimateAim, 2, new Color(80, 255, 80, 150));
+            }
+        }
+
+        // === LEAST ACTION PREDICTIONS ===
+        // Draw colored circles for each Least Action approach (linear mode only)
+        if (!isCircularMode)
+        {
+            // Purple - Inertia-Weighted prediction
+            // Accounts for target momentum, predicting overshoot on direction changes
+            if (inertiaResult.HasValue)
+            {
+                var inertiaAim = new Vector2((float)inertiaResult.Value.AimPoint.X, (float)inertiaResult.Value.AimPoint.Y);
+                var inertiaPredicted = new Vector2((float)inertiaResult.Value.PredictedTargetPosition.X, (float)inertiaResult.Value.PredictedTargetPosition.Y);
+                
+                // Purple circle for inertia prediction
+                Raylib.DrawCircleLinesV(inertiaAim, 10, new Color(180, 80, 255, 255));  // Purple outline
+                Raylib.DrawCircleV(inertiaAim, 8, new Color(140, 60, 200, 180));        // Purple fill
+                Raylib.DrawLineEx(targetPos, inertiaAim, 1.5f, new Color(180, 80, 255, 120));
+                // Small dot for predicted position
+                Raylib.DrawCircleV(inertiaPredicted, 4, new Color(180, 80, 255, 150));
+            }
+
+            // Orange - Dodge-Aware prediction
+            // Predicts where target will dodge based on least-effort escape
+            if (dodgeAwareResult.HasValue)
+            {
+                var dodgeAim = new Vector2((float)dodgeAwareResult.Value.AimPoint.X, (float)dodgeAwareResult.Value.AimPoint.Y);
+                var dodgePredicted = new Vector2((float)dodgeAwareResult.Value.PredictedTargetPosition.X, (float)dodgeAwareResult.Value.PredictedTargetPosition.Y);
+                
+                // Orange circle for dodge prediction
+                Raylib.DrawCircleLinesV(dodgeAim, 10, new Color(255, 160, 40, 255));    // Orange outline
+                Raylib.DrawCircleV(dodgeAim, 8, new Color(220, 130, 30, 180));          // Orange fill
+                Raylib.DrawLineEx(targetPos, dodgeAim, 1.5f, new Color(255, 160, 40, 120));
+                // Small dot for predicted position
+                Raylib.DrawCircleV(dodgePredicted, 4, new Color(255, 160, 40, 150));
+            }
+
+            // Cyan - Optimal Intercept prediction
+            // Minimizes combined time + dodge difficulty cost
+            if (optimalResult.HasValue)
+            {
+                var optimalAim = new Vector2((float)optimalResult.Value.AimPoint.X, (float)optimalResult.Value.AimPoint.Y);
+                var optimalPredicted = new Vector2((float)optimalResult.Value.PredictedTargetPosition.X, (float)optimalResult.Value.PredictedTargetPosition.Y);
+                
+                // Cyan circle for optimal prediction
+                Raylib.DrawCircleLinesV(optimalAim, 10, new Color(40, 255, 255, 255));  // Cyan outline
+                Raylib.DrawCircleV(optimalAim, 8, new Color(30, 200, 200, 180));        // Cyan fill
+                Raylib.DrawLineEx(targetPos, optimalAim, 1.5f, new Color(40, 255, 255, 120));
+                // Small dot for predicted position
+                Raylib.DrawCircleV(optimalPredicted, 4, new Color(40, 255, 255, 150));
             }
         }
     }
@@ -1792,22 +1888,44 @@ static void DrawUI(Font font, PredictionResult? ultimateResult, LAPPredictionRes
 
     // Prediction legend
     int legendY = ctrlY + 35;
-    Raylib.DrawRectangle(10, legendY, 420, 75, new Color(0, 0, 0, 200));
-    Raylib.DrawRectangleLines(10, legendY, 420, 75, new Color(80, 80, 100, 255));
+    int legendHeight = isCircularMode ? 75 : (pathModeActive ? 160 : 130);
+    Raylib.DrawRectangle(10, legendY, 380, legendHeight, new Color(0, 0, 0, 200));
+    Raylib.DrawRectangleLines(10, legendY, 380, legendHeight, new Color(80, 80, 100, 255));
 
     Raylib.DrawTextEx(font, "PREDICTION LEGEND", new Vector2(20, legendY + 8), fontSize, spacing, Color.White);
     legendY += 26;
-    // Green circle - baseline
+
+    // Green circle - baseline (always shown)
     Raylib.DrawCircleV(new Vector2(30, legendY + 8), 6, new Color(80, 255, 120, 220));
-    Raylib.DrawTextEx(font, "Baseline", new Vector2(45, legendY), smallFont, spacing, new Color(80, 255, 120, 255));
-    // Magenta circle - LAP
-    Raylib.DrawCircleV(new Vector2(130, legendY + 8), 6, new Color(255, 100, 255, 220));
-    Raylib.DrawTextEx(font, "LAP (dodge)", new Vector2(145, legendY), smallFont, spacing, new Color(255, 100, 255, 255));
-    // Blue circle - trailing
-    if (!isCircularMode && pathModeActive)
+    Raylib.DrawTextEx(font, "Baseline", new Vector2(50, legendY), smallFont, spacing, new Color(80, 255, 120, 255));
+
+    // Magenta circle - LAP (always shown)
+    Raylib.DrawCircleV(new Vector2(180, legendY + 8), 6, new Color(255, 100, 255, 220));
+    Raylib.DrawTextEx(font, "LAP (dodge)", new Vector2(200, legendY), smallFont, spacing, new Color(255, 100, 255, 255));
+    legendY += 22;
+
+    // Linear mode only: show LeastAction predictions
+    if (!isCircularMode)
     {
-        Raylib.DrawCircleV(new Vector2(250, legendY + 8), 5, new Color(80, 140, 255, 220));
-        Raylib.DrawTextEx(font, "Trailing", new Vector2(265, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
+        // Purple - Inertia
+        Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(180, 80, 255, 200));
+        Raylib.DrawTextEx(font, "Inertia", new Vector2(50, legendY), smallFont, spacing, new Color(180, 100, 255, 255));
+
+        // Orange - Dodge-Aware
+        Raylib.DrawCircleV(new Vector2(130, legendY + 8), 5, new Color(255, 160, 40, 200));
+        Raylib.DrawTextEx(font, "Dodge-Aware", new Vector2(150, legendY), smallFont, spacing, new Color(255, 180, 80, 255));
+
+        // Cyan - Optimal
+        Raylib.DrawCircleV(new Vector2(270, legendY + 8), 5, new Color(40, 255, 255, 200));
+        Raylib.DrawTextEx(font, "Optimal", new Vector2(290, legendY), smallFont, spacing, new Color(80, 255, 255, 255));
+        legendY += 22;
+
+        // Blue trailing edge (only in path mode)
+        if (pathModeActive)
+        {
+            Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(80, 140, 255, 200));
+            Raylib.DrawTextEx(font, "Trailing Edge (pure behind)", new Vector2(50, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
+        }
     }
     legendY += lineHeight;
     Raylib.DrawTextEx(font, "Magenta dashed line = predicted dodge trajectory", new Vector2(20, legendY), smallFont - 2, spacing, new Color(255, 100, 255, 180));
