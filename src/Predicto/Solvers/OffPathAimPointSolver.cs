@@ -115,8 +115,15 @@ public static class OffPathAimPointSolver
     }
 
     /// <summary>
-    /// Strategy 3: Optimal angle - search for the angle on the hitbox circle
-    /// that maximizes "behindness" while maintaining valid intercept geometry.
+    /// Strategy 3: Optimal angle - uses continuous math to find the angle on the hitbox circle
+    /// that balances "behindness" (70%) and "accessibility" from caster (30%).
+    /// 
+    /// Instead of discrete sampling, this computes the optimal angle analytically by:
+    /// 1. Finding the caster's angle relative to target movement direction
+    /// 2. Clamping to the behind hemisphere [π/2, 3π/2]
+    /// 3. Blending between this angle and π (directly behind) using the 0.7/0.3 weights
+    /// 
+    /// This produces smooth, continuous transitions as positions change.
     /// </summary>
     private static Point2D CalculateOptimalAngle(
         Point2D casterPosition,
@@ -128,47 +135,55 @@ public static class OffPathAimPointSolver
             return predictedPosition;
 
         Vector2D moveDir = targetVelocity.Normalize();
-        Vector2D behindDir = moveDir.Negate();
-
-        // Perpendicular to movement (for parameterizing the circle)
+        
+        // Perpendicular to movement direction
         Vector2D perpToMove = new Vector2D(-moveDir.Y, moveDir.X);
 
-        // Search angles in the "behind" hemisphere (90° to 270° relative to movement)
-        // Angle 0 = movement direction, 180° = behind direction
-        Point2D bestPoint = predictedPosition + behindDir * effectiveRadius;
-        double bestScore = double.MinValue;
+        // Express caster position in the coordinate system centered at predicted position
+        // with moveDir as X-axis and perpToMove as Y-axis
+        Vector2D towardCaster = casterPosition - predictedPosition;
+        double casterAlongMove = towardCaster.DotProduct(moveDir);    // Cm
+        double casterAlongPerp = towardCaster.DotProduct(perpToMove); // Cp
 
-        // Sample angles in the behind hemisphere
-        for (int i = 0; i <= 20; i++)
+        // Calculate caster's angle in this coordinate system
+        // Angle 0 = movement direction, π = directly behind
+        double casterAngle = Math.Atan2(casterAlongPerp, casterAlongMove);
+
+        // Clamp to behind hemisphere [π/2, 3π/2]
+        // This ensures we never aim at the front of the target
+        double clampedAngle = ClampAngleToBehindHemisphere(casterAngle);
+
+        // Blend between clamped caster angle (accessibility) and π (directly behind)
+        // Using weights: 0.7 for behindness, 0.3 for accessibility
+        const double directBehindAngle = Math.PI;
+        const double behindWeight = 0.7;
+        double optimalAngle = clampedAngle + (directBehindAngle - clampedAngle) * behindWeight;
+
+        // Convert angle back to point on circle
+        double x = Math.Cos(optimalAngle);
+        double y = Math.Sin(optimalAngle);
+        return predictedPosition + moveDir * (x * effectiveRadius) + perpToMove * (y * effectiveRadius);
+    }
+
+    /// <summary>
+    /// Clamps an angle to the behind hemisphere [π/2, 3π/2].
+    /// Angles in the front hemisphere are clamped to the nearest edge.
+    /// </summary>
+    private static double ClampAngleToBehindHemisphere(double angle)
+    {
+        // Normalize to [-π, π]
+        while (angle > Math.PI) angle -= 2 * Math.PI;
+        while (angle < -Math.PI) angle += 2 * Math.PI;
+
+        // Behind hemisphere is where x < 0, i.e., angle in (π/2, 3π/2) or equivalently |angle| > π/2
+        if (Math.Abs(angle) >= Math.PI / 2)
         {
-            // Angle from 90° to 270° (behind hemisphere)
-            double t = i / 20.0;
-            double angle = Math.PI * (0.5 + t); // 90° to 270°
-
-            // Point on circle at this angle
-            double x = Math.Cos(angle);
-            double y = Math.Sin(angle);
-            Point2D circlePoint = predictedPosition + moveDir * (x * effectiveRadius) + perpToMove * (y * effectiveRadius);
-
-            // Score: combination of "behindness" and "ease of hit" from caster
-            Vector2D offset = circlePoint - predictedPosition;
-            double behindness = offset.Normalize().DotProduct(behindDir);
-
-            // Prefer points that are more directly reachable from caster
-            Vector2D toCaster = (casterPosition - circlePoint).Normalize();
-            Vector2D toCenter = (predictedPosition - circlePoint).Normalize();
-            double accessibility = toCaster.DotProduct(toCenter);
-
-            double score = behindness * 0.7 + accessibility * 0.3;
-
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestPoint = circlePoint;
-            }
+            // Already in behind hemisphere
+            return angle;
         }
 
-        return bestPoint;
+        // In front hemisphere - clamp to nearest edge (π/2 or -π/2)
+        return angle >= 0 ? Math.PI / 2 : -Math.PI / 2;
     }
 
     /// <summary>
