@@ -107,10 +107,9 @@ public class OffPathAimPointSolverTests
     }
 
     [Fact]
-    public void TargetMovingTowardCaster_Adaptive_BiasedTowardTangent()
+    public void TargetMovingTowardCaster_Adaptive_IsCenterOfTangentAndDirectBehind()
     {
-        // When target moves toward caster, Adaptive should be biased toward Tangent
-        // but blended with center for smoothing
+        // Adaptive returns the center between Tangent and DirectBehind, projected onto the circle
         var caster = new Point2D(0, 0);
         var predicted = new Point2D(500, 0);
         var velocity = new Vector2D(-300, 0); // Moving directly toward caster
@@ -123,12 +122,13 @@ public class OffPathAimPointSolverTests
         var directBehindResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
             caster, predicted, velocity, radius, BehindEdgeStrategy.DirectBehind);
 
-        // Adaptive should be closer to Tangent than to DirectBehind when approaching
+        // Adaptive should be roughly equidistant from both Tangent and DirectBehind
         double distToTangent = (adaptiveResult - tangentResult).Length;
         double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
         
-        Assert.True(distToTangent <= distToDirectBehind,
-            $"Adaptive should be closer to Tangent ({distToTangent:F1}) than DirectBehind ({distToDirectBehind:F1}) when approaching");
+        // Allow some tolerance due to projection onto circle
+        Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
+            $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1})");
         
         // Adaptive should still be on the effective radius circle
         double distFromPredicted = (adaptiveResult - predicted).Length;
@@ -160,10 +160,9 @@ public class OffPathAimPointSolverTests
     }
 
     [Fact]
-    public void TargetMovingAwayFromCaster_Adaptive_BiasedTowardDirectBehind()
+    public void TargetMovingAwayFromCaster_Adaptive_IsCenterOfTangentAndDirectBehind()
     {
-        // When target moves away from caster, Adaptive should be biased toward DirectBehind
-        // but blended with center for smoothing
+        // Adaptive returns the center between Tangent and DirectBehind, projected onto the circle
         var caster = new Point2D(0, 0);
         var predicted = new Point2D(500, 0);
         var velocity = new Vector2D(300, 0); // Moving directly away from caster
@@ -176,12 +175,13 @@ public class OffPathAimPointSolverTests
         var directBehindResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
             caster, predicted, velocity, radius, BehindEdgeStrategy.DirectBehind);
 
-        // Adaptive should be closer to DirectBehind than to Tangent when retreating
+        // Adaptive should be roughly equidistant from both Tangent and DirectBehind
         double distToTangent = (adaptiveResult - tangentResult).Length;
         double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
         
-        Assert.True(distToDirectBehind <= distToTangent,
-            $"Adaptive should be closer to DirectBehind ({distToDirectBehind:F1}) than Tangent ({distToTangent:F1}) when retreating");
+        // Allow some tolerance due to projection onto circle
+        Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
+            $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1})");
         
         // Adaptive should still be on the effective radius circle
         double distFromPredicted = (adaptiveResult - predicted).Length;
@@ -479,21 +479,24 @@ public class OffPathAimPointSolverTests
     }
 
     [Fact]
-    public void Adaptive_ApproachFactor_CorrectlyDeterminesStrategy()
+    public void Adaptive_AlwaysReturnsCenterOfTangentAndDirectBehind()
     {
         var caster = new Point2D(0, 0);
         var predicted = new Point2D(500, 0);
         double radius = 50;
 
-        // Test various approach angles
-        var testCases = new[]
+        // Test various approach angles - Adaptive should always be center between Tangent and DirectBehind
+        var velocities = new[]
         {
-            (velocity: new Vector2D(-300, 0), expectedCloserTo: "Tangent"),      // Directly toward
-            (velocity: new Vector2D(300, 0), expectedCloserTo: "DirectBehind"),  // Directly away
-            (velocity: new Vector2D(0, 300), expectedCloserTo: "Blend"),         // Perpendicular
+            new Vector2D(-300, 0),   // Directly toward
+            new Vector2D(300, 0),    // Directly away
+            new Vector2D(0, 300),    // Perpendicular up
+            new Vector2D(0, -300),   // Perpendicular down
+            new Vector2D(-200, 200), // Diagonal toward
+            new Vector2D(200, 200),  // Diagonal away
         };
 
-        foreach (var (velocity, expectedCloserTo) in testCases)
+        foreach (var velocity in velocities)
         {
             var adaptiveResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
                 caster, predicted, velocity, radius, BehindEdgeStrategy.Adaptive);
@@ -505,23 +508,13 @@ public class OffPathAimPointSolverTests
             double distToTangent = (adaptiveResult - tangentResult).Length;
             double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
 
-            switch (expectedCloserTo)
-            {
-                case "Tangent":
-                    Assert.True(distToTangent <= distToDirectBehind,
-                        $"Adaptive should be closer to Tangent when moving toward caster");
-                    break;
-                case "DirectBehind":
-                    Assert.True(distToDirectBehind <= distToTangent,
-                        $"Adaptive should be closer to DirectBehind when moving away");
-                    break;
-                case "Blend":
-                    // For perpendicular, should be somewhere in between
-                    // Just verify it's a valid point
-                    double distFromPredicted = (adaptiveResult - predicted).Length;
-                    Assert.Equal(radius, distFromPredicted, precision: 1);
-                    break;
-            }
+            // Adaptive should be roughly equidistant from both (it's the center, projected onto circle)
+            Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
+                $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1}) for velocity {velocity}");
+            
+            // Should be on the circle
+            double distFromPredicted = (adaptiveResult - predicted).Length;
+            Assert.Equal(radius, distFromPredicted, precision: 1);
         }
     }
 

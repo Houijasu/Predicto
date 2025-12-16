@@ -172,16 +172,9 @@ public static class OffPathAimPointSolver
     }
 
     /// <summary>
-    /// Strategy 4: Adaptive - smoothly blends between Tangent and DirectBehind based on
-    /// whether the target is moving toward or away from the caster, then blends the result
-    /// with the center position for smoother prediction transitions.
-    /// 
-    /// - Target moving toward caster: Use Tangent (faster intercept)
-    /// - Target moving away from caster: Use DirectBehind (target walks into skillshot)
-    /// - Target moving perpendicular: Blend between both strategies
-    /// - Final result is blended with center position for smoothing
-    /// 
-    /// The blend uses a smooth transition to avoid sudden jumps in aim position.
+    /// Strategy 4: Adaptive - returns the center point between Tangent and DirectBehind (trailing edge).
+    /// This provides a balanced aim point that works well for all movement directions.
+    /// The result is projected back onto the effective radius circle.
     /// </summary>
     private static Point2D CalculateAdaptive(
         Point2D casterPosition,
@@ -196,58 +189,20 @@ public static class OffPathAimPointSolver
         Point2D tangentPoint = CalculateTangentPoint(casterPosition, predictedPosition, targetVelocity, effectiveRadius);
         Point2D directBehindPoint = CalculateDirectBehind(predictedPosition, targetVelocity, effectiveRadius);
 
-        // Determine if target is moving toward or away from caster
-        Vector2D toCaster = (casterPosition - predictedPosition);
-        double distToCaster = toCaster.Length;
-        if (distToCaster < Constants.Epsilon)
-            return tangentPoint;
-
-        Vector2D toCasterNorm = toCaster / distToCaster;
-        Vector2D moveDir = targetVelocity.Normalize();
-
-        // Dot product: +1 = moving directly toward caster, -1 = moving directly away
-        // 0 = moving perpendicular
-        double approachFactor = moveDir.DotProduct(toCasterNorm);
-
-        // Map approach factor to blend weight using smooth transition
-        // approachFactor in [-1, 1] -> blendWeight in [0, 1]
-        // +1 (toward) -> 1.0 (use Tangent)
-        // -1 (away)   -> 0.0 (use DirectBehind)
-        // 0 (perp)    -> 0.5 (blend)
-        double t = (approachFactor + 1.0) / 2.0; // Map [-1, 1] to [0, 1]
-        double blendWeight = SmoothStep(t);
-
-        // First blend: between DirectBehind and Tangent based on approach direction
-        Point2D behindEdgePoint = Lerp(directBehindPoint, tangentPoint, blendWeight);
-
-        // Second blend: mix the behind edge point with center position for smoothing
-        // This creates a smoother transition by anchoring partially to the center
-        // Use a moderate blend factor (0.7 edge, 0.3 center) to keep behind-edge behavior
-        // while smoothing out rapid position changes
-        const double edgeWeight = 0.7;
-        Point2D smoothedPoint = Lerp(predictedPosition, behindEdgePoint, edgeWeight);
+        // Simply take the center between Tangent and DirectBehind
+        Point2D centerPoint = Lerp(tangentPoint, directBehindPoint, 0.5);
 
         // Project back onto the effective radius circle to maintain valid aim geometry
-        Vector2D offset = smoothedPoint - predictedPosition;
+        Vector2D offset = centerPoint - predictedPosition;
         double offsetLength = offset.Length;
         if (offsetLength < Constants.Epsilon)
         {
-            // Smoothed point is at center, fall back to behind edge point
-            return behindEdgePoint;
+            // Center is at predicted position, fall back to direct behind
+            return directBehindPoint;
         }
 
         // Scale to effective radius
         return predictedPosition + offset * (effectiveRadius / offsetLength);
-    }
-
-    /// <summary>
-    /// Attempt to get a smoother blend value beyond regular smoothstep.
-    /// </summary>
-    private static double SmoothStep(double t)
-    {
-        // Regular smoothstep: 3t² - 2t³
-        t = Math.Clamp(t, 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
     }
 
     /// <summary>
