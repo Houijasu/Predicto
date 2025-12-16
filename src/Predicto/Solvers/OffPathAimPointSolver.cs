@@ -173,11 +173,13 @@ public static class OffPathAimPointSolver
 
     /// <summary>
     /// Strategy 4: Adaptive - smoothly blends between Tangent and DirectBehind based on
-    /// whether the target is moving toward or away from the caster.
+    /// whether the target is moving toward or away from the caster, then blends the result
+    /// with the center position for smoother prediction transitions.
     /// 
     /// - Target moving toward caster: Use Tangent (faster intercept)
     /// - Target moving away from caster: Use DirectBehind (target walks into skillshot)
     /// - Target moving perpendicular: Blend between both strategies
+    /// - Final result is blended with center position for smoothing
     /// 
     /// The blend uses a smooth transition to avoid sudden jumps in aim position.
     /// </summary>
@@ -212,12 +214,30 @@ public static class OffPathAimPointSolver
         // +1 (toward) -> 1.0 (use Tangent)
         // -1 (away)   -> 0.0 (use DirectBehind)
         // 0 (perp)    -> 0.5 (blend)
-        // Use smoothstep for smooth transition
         double t = (approachFactor + 1.0) / 2.0; // Map [-1, 1] to [0, 1]
         double blendWeight = SmoothStep(t);
 
-        // Blend between DirectBehind (weight=0) and Tangent (weight=1)
-        return Lerp(directBehindPoint, tangentPoint, blendWeight);
+        // First blend: between DirectBehind and Tangent based on approach direction
+        Point2D behindEdgePoint = Lerp(directBehindPoint, tangentPoint, blendWeight);
+
+        // Second blend: mix the behind edge point with center position for smoothing
+        // This creates a smoother transition by anchoring partially to the center
+        // Use a moderate blend factor (0.7 edge, 0.3 center) to keep behind-edge behavior
+        // while smoothing out rapid position changes
+        const double edgeWeight = 0.7;
+        Point2D smoothedPoint = Lerp(predictedPosition, behindEdgePoint, edgeWeight);
+
+        // Project back onto the effective radius circle to maintain valid aim geometry
+        Vector2D offset = smoothedPoint - predictedPosition;
+        double offsetLength = offset.Length;
+        if (offsetLength < Constants.Epsilon)
+        {
+            // Smoothed point is at center, fall back to behind edge point
+            return behindEdgePoint;
+        }
+
+        // Scale to effective radius
+        return predictedPosition + offset * (effectiveRadius / offsetLength);
     }
 
     /// <summary>

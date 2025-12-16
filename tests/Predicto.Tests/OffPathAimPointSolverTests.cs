@@ -107,9 +107,10 @@ public class OffPathAimPointSolverTests
     }
 
     [Fact]
-    public void TargetMovingTowardCaster_Adaptive_UsesTangent()
+    public void TargetMovingTowardCaster_Adaptive_BiasedTowardTangent()
     {
-        // When target moves toward caster, Adaptive should use Tangent
+        // When target moves toward caster, Adaptive should be biased toward Tangent
+        // but blended with center for smoothing
         var caster = new Point2D(0, 0);
         var predicted = new Point2D(500, 0);
         var velocity = new Vector2D(-300, 0); // Moving directly toward caster
@@ -119,11 +120,19 @@ public class OffPathAimPointSolverTests
             caster, predicted, velocity, radius, BehindEdgeStrategy.Adaptive);
         var tangentResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
             caster, predicted, velocity, radius, BehindEdgeStrategy.Tangent);
+        var directBehindResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
+            caster, predicted, velocity, radius, BehindEdgeStrategy.DirectBehind);
 
-        // Adaptive should be very close to Tangent when moving toward caster
-        double distance = (adaptiveResult - tangentResult).Length;
-        Assert.True(distance < radius * 0.1,
-            $"Adaptive should be close to Tangent when approaching, got distance {distance}");
+        // Adaptive should be closer to Tangent than to DirectBehind when approaching
+        double distToTangent = (adaptiveResult - tangentResult).Length;
+        double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
+        
+        Assert.True(distToTangent <= distToDirectBehind,
+            $"Adaptive should be closer to Tangent ({distToTangent:F1}) than DirectBehind ({distToDirectBehind:F1}) when approaching");
+        
+        // Adaptive should still be on the effective radius circle
+        double distFromPredicted = (adaptiveResult - predicted).Length;
+        Assert.Equal(radius, distFromPredicted, precision: 1);
     }
 
     #endregion
@@ -151,9 +160,10 @@ public class OffPathAimPointSolverTests
     }
 
     [Fact]
-    public void TargetMovingAwayFromCaster_Adaptive_UsesDirectBehind()
+    public void TargetMovingAwayFromCaster_Adaptive_BiasedTowardDirectBehind()
     {
-        // When target moves away from caster, Adaptive should use DirectBehind
+        // When target moves away from caster, Adaptive should be biased toward DirectBehind
+        // but blended with center for smoothing
         var caster = new Point2D(0, 0);
         var predicted = new Point2D(500, 0);
         var velocity = new Vector2D(300, 0); // Moving directly away from caster
@@ -161,13 +171,21 @@ public class OffPathAimPointSolverTests
 
         var adaptiveResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
             caster, predicted, velocity, radius, BehindEdgeStrategy.Adaptive);
+        var tangentResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
+            caster, predicted, velocity, radius, BehindEdgeStrategy.Tangent);
         var directBehindResult = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
             caster, predicted, velocity, radius, BehindEdgeStrategy.DirectBehind);
 
-        // Adaptive should be very close to DirectBehind when moving away
-        double distance = (adaptiveResult - directBehindResult).Length;
-        Assert.True(distance < radius * 0.1,
-            $"Adaptive should be close to DirectBehind when retreating, got distance {distance}");
+        // Adaptive should be closer to DirectBehind than to Tangent when retreating
+        double distToTangent = (adaptiveResult - tangentResult).Length;
+        double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
+        
+        Assert.True(distToDirectBehind <= distToTangent,
+            $"Adaptive should be closer to DirectBehind ({distToDirectBehind:F1}) than Tangent ({distToTangent:F1}) when retreating");
+        
+        // Adaptive should still be on the effective radius circle
+        double distFromPredicted = (adaptiveResult - predicted).Length;
+        Assert.Equal(radius, distFromPredicted, precision: 1);
     }
 
     [Fact]
