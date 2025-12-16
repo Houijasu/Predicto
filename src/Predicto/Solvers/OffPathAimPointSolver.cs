@@ -292,12 +292,10 @@ public static class OffPathAimPointSolver
 
     /// <summary>
     /// Calculates the TRUE intercept time - when the skillshot's edge first touches the target's hitbox.
-    /// This solves the geometric collision problem between a moving projectile and moving target.
+    /// This solves the geometric collision problem between a moving LINE (skillshot path) and moving CIRCLE (target).
     /// 
-    /// Given:
-    /// - Projectile travels from caster toward aimPoint at skillshotSpeed after castDelay
-    /// - Target starts at targetPosition and moves with targetVelocity
-    /// - Collision occurs when distance between centers = targetRadius + skillshotWidth/2
+    /// For off-path aim points, the skillshot travels along a line toward the aim point.
+    /// Collision occurs when the target's hitbox touches this line (perpendicular distance = collision radius).
     /// </summary>
     /// <param name="casterPosition">Where the skillshot originates</param>
     /// <param name="aimPoint">Where the skillshot is aimed (determines direction)</param>
@@ -328,55 +326,100 @@ public static class OffPathAimPointSolver
             return null;
 
         Vector2D shotDirection = toAim / aimDistance;
+        
+        // Perpendicular to shot direction (for calculating distance to line)
+        Vector2D perpendicular = new Vector2D(-shotDirection.Y, shotDirection.X);
 
-        // Projectile position at time t (for t >= castDelay):
-        //   Proj(t) = C + shotDirection * speed * (t - delay)
+        // The skillshot travels along the line: C + shotDirection * s * (t - delay)
+        // The target moves: P + V * t
         //
-        // Target position at time t:
-        //   Target(t) = P + V * t
+        // Distance from target to skillshot LINE (not point) is:
+        //   d(t) = |( Target(t) - C ) · perpendicular|
+        //        = |( P + V*t - C ) · perpendicular|
+        //        = |( (P - C) · perp ) + ( V · perp ) * t|
         //
-        // Collision when |Proj(t) - Target(t)| = collisionRadius
+        // Collision when d(t) = collisionRadius AND projectile has traveled far enough
+        
+        Vector2D casterToTarget = targetPosition - casterPosition;
+        double initialPerpDist = casterToTarget.DotProduct(perpendicular);
+        double perpVelocity = targetVelocity.DotProduct(perpendicular);
+        
+        // perpDist(t) = initialPerpDist + perpVelocity * t
+        // |perpDist(t)| = collisionRadius
         //
-        // Let D = C - P (vector from target to caster)
-        // |D + shotDirection * speed * (t - delay) - V * t| = collisionRadius
-        //
-        // Rearrange:
-        // |(D - shotDirection * speed * delay) + (shotDirection * speed - V) * t| = collisionRadius
-        //
-        // Let:
-        //   w = D - shotDirection * speed * delay  (initial offset)
-        //   u = shotDirection * speed - V          (relative velocity)
-        //
-        // |w + u*t|^2 = R^2
-        // |u|^2 * t^2 + 2*(w·u)*t + |w|^2 - R^2 = 0
+        // Two cases:
+        // Case 1: initialPerpDist + perpVelocity * t = collisionRadius
+        // Case 2: initialPerpDist + perpVelocity * t = -collisionRadius
 
-        Vector2D D = casterPosition - targetPosition;
-        Vector2D w = D - shotDirection * skillshotSpeed * castDelay;
-        Vector2D u = shotDirection * skillshotSpeed - targetVelocity;
+        double? t1 = null, t2 = null;
+        
+        if (Math.Abs(perpVelocity) > Constants.Epsilon)
+        {
+            t1 = (collisionRadius - initialPerpDist) / perpVelocity;
+            t2 = (-collisionRadius - initialPerpDist) / perpVelocity;
+        }
+        else
+        {
+            // Target not moving perpendicular to shot line
+            // Check if it's already within collision distance
+            if (Math.Abs(initialPerpDist) <= collisionRadius)
+            {
+                // Target path is parallel and within collision range
+                // Find when projectile reaches target's forward position
+                double forwardDist = casterToTarget.DotProduct(shotDirection);
+                double forwardVelocity = targetVelocity.DotProduct(shotDirection);
+                
+                // Projectile position along line at time t: speed * (t - delay)
+                // Target position along line at time t: forwardDist + forwardVelocity * t
+                // 
+                // Collision when projectile catches up to target (within collision radius):
+                // speed * (t - delay) >= forwardDist + forwardVelocity * t - collisionRadius
+                // (speed - forwardVelocity) * t >= forwardDist - collisionRadius + speed * delay
+                
+                double relativeSpeed = skillshotSpeed - forwardVelocity;
+                if (relativeSpeed > Constants.Epsilon)
+                {
+                    double tCollision = (forwardDist - collisionRadius + skillshotSpeed * castDelay) / relativeSpeed;
+                    if (tCollision >= castDelay)
+                        return tCollision;
+                }
+                return null;
+            }
+            return null; // Target path misses the shot line entirely
+        }
 
-        double a = u.DotProduct(u);            // |u|^2
-        double b = 2 * w.DotProduct(u);        // 2*(w·u)
-        double c = w.DotProduct(w) - collisionRadius * collisionRadius;  // |w|^2 - R^2
+        // For each candidate time, verify:
+        // 1. t >= castDelay (projectile must have launched)
+        // 2. Projectile has traveled far enough to reach the target's forward position
+        // 3. Target is in front of caster (not behind)
+        
+        double? bestTime = null;
+        
+        foreach (double? tCandidate in new[] { t1, t2 })
+        {
+            if (!tCandidate.HasValue || tCandidate.Value < castDelay)
+                continue;
+                
+            double t = tCandidate.Value;
+            
+            // Where is the projectile at time t?
+            double projectileForwardPos = skillshotSpeed * (t - castDelay);
+            
+            // Where is the target (along the shot direction) at time t?
+            Vector2D targetAtT = (targetPosition - casterPosition) + targetVelocity * t;
+            double targetForwardPos = targetAtT.DotProduct(shotDirection);
+            
+            // Projectile must have reached the target's position (within collision radius)
+            // Projectile leading edge is at: projectileForwardPos + collisionRadius (we want edge contact)
+            // Actually, for edge contact: projectileForwardPos >= targetForwardPos - collisionRadius
+            if (projectileForwardPos >= targetForwardPos - collisionRadius && targetForwardPos > 0)
+            {
+                if (!bestTime.HasValue || t < bestTime.Value)
+                    bestTime = t;
+            }
+        }
 
-        // Solve quadratic at^2 + bt + c = 0
-        double discriminant = b * b - 4 * a * c;
-
-        if (discriminant < 0)
-            return null; // No intersection
-
-        double sqrtDisc = Math.Sqrt(discriminant);
-
-        // Two solutions - we want the smallest t >= castDelay
-        double t1 = (-b - sqrtDisc) / (2 * a);
-        double t2 = (-b + sqrtDisc) / (2 * a);
-
-        // Return the first valid collision time (>= castDelay)
-        if (t1 >= castDelay)
-            return t1;
-        if (t2 >= castDelay)
-            return t2;
-
-        return null; // Collision happened in the past or during delay
+        return bestTime;
     }
 }
 
