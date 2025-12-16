@@ -289,6 +289,95 @@ public static class OffPathAimPointSolver
             a.X + (b.X - a.X) * t,
             a.Y + (b.Y - a.Y) * t);
     }
+
+    /// <summary>
+    /// Calculates the TRUE intercept time - when the skillshot's edge first touches the target's hitbox.
+    /// This solves the geometric collision problem between a moving projectile and moving target.
+    /// 
+    /// Given:
+    /// - Projectile travels from caster toward aimPoint at skillshotSpeed after castDelay
+    /// - Target starts at targetPosition and moves with targetVelocity
+    /// - Collision occurs when distance between centers = targetRadius + skillshotWidth/2
+    /// </summary>
+    /// <param name="casterPosition">Where the skillshot originates</param>
+    /// <param name="aimPoint">Where the skillshot is aimed (determines direction)</param>
+    /// <param name="targetPosition">Target's current position</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="skillshotSpeed">Speed of the projectile</param>
+    /// <param name="castDelay">Delay before projectile starts moving</param>
+    /// <param name="targetRadius">Target's hitbox radius</param>
+    /// <param name="skillshotWidth">Width of the skillshot</param>
+    /// <returns>Time in seconds when collision occurs, or null if no collision</returns>
+    public static double? CalculateTrueInterceptTime(
+        Point2D casterPosition,
+        Point2D aimPoint,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double targetRadius,
+        double skillshotWidth)
+    {
+        // Combined collision radius
+        double collisionRadius = targetRadius + skillshotWidth / 2;
+
+        // Direction from caster to aim point
+        Vector2D toAim = aimPoint - casterPosition;
+        double aimDistance = toAim.Length;
+        if (aimDistance < Constants.Epsilon)
+            return null;
+
+        Vector2D shotDirection = toAim / aimDistance;
+
+        // Projectile position at time t (for t >= castDelay):
+        //   Proj(t) = C + shotDirection * speed * (t - delay)
+        //
+        // Target position at time t:
+        //   Target(t) = P + V * t
+        //
+        // Collision when |Proj(t) - Target(t)| = collisionRadius
+        //
+        // Let D = C - P (vector from target to caster)
+        // |D + shotDirection * speed * (t - delay) - V * t| = collisionRadius
+        //
+        // Rearrange:
+        // |(D - shotDirection * speed * delay) + (shotDirection * speed - V) * t| = collisionRadius
+        //
+        // Let:
+        //   w = D - shotDirection * speed * delay  (initial offset)
+        //   u = shotDirection * speed - V          (relative velocity)
+        //
+        // |w + u*t|^2 = R^2
+        // |u|^2 * t^2 + 2*(w·u)*t + |w|^2 - R^2 = 0
+
+        Vector2D D = casterPosition - targetPosition;
+        Vector2D w = D - shotDirection * skillshotSpeed * castDelay;
+        Vector2D u = shotDirection * skillshotSpeed - targetVelocity;
+
+        double a = u.DotProduct(u);            // |u|^2
+        double b = 2 * w.DotProduct(u);        // 2*(w·u)
+        double c = w.DotProduct(w) - collisionRadius * collisionRadius;  // |w|^2 - R^2
+
+        // Solve quadratic at^2 + bt + c = 0
+        double discriminant = b * b - 4 * a * c;
+
+        if (discriminant < 0)
+            return null; // No intersection
+
+        double sqrtDisc = Math.Sqrt(discriminant);
+
+        // Two solutions - we want the smallest t >= castDelay
+        double t1 = (-b - sqrtDisc) / (2 * a);
+        double t2 = (-b + sqrtDisc) / (2 * a);
+
+        // Return the first valid collision time (>= castDelay)
+        if (t1 >= castDelay)
+            return t1;
+        if (t2 >= castDelay)
+            return t2;
+
+        return null; // Collision happened in the past or during delay
+    }
 }
 
 public enum BehindEdgeStrategy

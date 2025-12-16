@@ -790,23 +790,29 @@ while (!Raylib.WindowShouldClose())
                 input.CasterPosition, predictedPos, velocity, effectiveRadius,
                 BehindEdgeStrategy.Adaptive);
             
-            // Calculate intercept times (time = distance / speed + delay)
+            // Calculate TRUE intercept times (when skillshot edge touches target hitbox)
             if (tangentAimPoint.HasValue)
             {
-                double dist = (tangentAimPoint.Value - input.CasterPosition).Length;
-                tangentInterceptTime = dist / skillshotSpeed + skillshotDelay;
+                var trueTime = OffPathAimPointSolver.CalculateTrueInterceptTime(
+                    input.CasterPosition, tangentAimPoint.Value, input.TargetPosition, velocity,
+                    skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
+                tangentInterceptTime = trueTime ?? 0;
             }
             
             if (optimalAngleAimPoint.HasValue)
             {
-                double dist = (optimalAngleAimPoint.Value - input.CasterPosition).Length;
-                optimalAngleInterceptTime = dist / skillshotSpeed + skillshotDelay;
+                var trueTime = OffPathAimPointSolver.CalculateTrueInterceptTime(
+                    input.CasterPosition, optimalAngleAimPoint.Value, input.TargetPosition, velocity,
+                    skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
+                optimalAngleInterceptTime = trueTime ?? 0;
             }
             
             if (adaptiveAimPoint.HasValue)
             {
-                double dist = (adaptiveAimPoint.Value - input.CasterPosition).Length;
-                adaptiveInterceptTime = dist / skillshotSpeed + skillshotDelay;
+                var trueTime = OffPathAimPointSolver.CalculateTrueInterceptTime(
+                    input.CasterPosition, adaptiveAimPoint.Value, input.TargetPosition, velocity,
+                    skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
+                adaptiveInterceptTime = trueTime ?? 0;
             }
         }
         
