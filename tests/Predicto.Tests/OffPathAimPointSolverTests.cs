@@ -272,7 +272,6 @@ public class OffPathAimPointSolverTests
     [Theory]
     [InlineData(BehindEdgeStrategy.DirectBehind)]
     [InlineData(BehindEdgeStrategy.Tangent)]
-    [InlineData(BehindEdgeStrategy.OptimalAngle)]
     public void NonBlendedStrategies_AimPointOnCircle(BehindEdgeStrategy strategy)
     {
         var caster = new Point2D(0, 0);
@@ -313,7 +312,6 @@ public class OffPathAimPointSolverTests
     [Theory]
     [InlineData(BehindEdgeStrategy.DirectBehind)]
     [InlineData(BehindEdgeStrategy.Tangent)]
-    [InlineData(BehindEdgeStrategy.OptimalAngle)]
     [InlineData(BehindEdgeStrategy.Adaptive)]
     public void AllStrategies_AimPointInBehindHemisphere(BehindEdgeStrategy strategy)
     {
@@ -388,48 +386,6 @@ public class OffPathAimPointSolverTests
             double distFromPredicted = (result - predicted).Length;
             Assert.Equal(radius, distFromPredicted, precision: 1);
         }
-    }
-
-    #endregion
-
-    #region OptimalAngle Specific Tests
-
-    [Fact]
-    public void OptimalAngle_FindsBestScorePoint()
-    {
-        var caster = new Point2D(0, 0);
-        var predicted = new Point2D(500, 200);
-        var velocity = new Vector2D(-200, 100);
-        double radius = 50;
-
-        var result = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
-            caster, predicted, velocity, radius, BehindEdgeStrategy.OptimalAngle);
-
-        // Should be on the circle
-        double distFromPredicted = (result - predicted).Length;
-        Assert.Equal(radius, distFromPredicted, precision: 1);
-
-        // Should be in behind hemisphere
-        Vector2D behindDir = velocity.Normalize().Negate();
-        Vector2D aimOffset = (result - predicted).Normalize();
-        double behindness = aimOffset.DotProduct(behindDir);
-        Assert.True(behindness > 0, $"OptimalAngle should be behind target, got behindness {behindness}");
-    }
-
-    [Fact]
-    public void OptimalAngle_StationaryTarget_ReturnsPredictedPosition()
-    {
-        var caster = new Point2D(0, 0);
-        var predicted = new Point2D(500, 0);
-        var velocity = new Vector2D(0, 0);
-        double radius = 50;
-
-        var result = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
-            caster, predicted, velocity, radius, BehindEdgeStrategy.OptimalAngle);
-
-        // Should return predicted position for stationary target
-        Assert.Equal(predicted.X, result.X, precision: 1);
-        Assert.Equal(predicted.Y, result.Y, precision: 1);
     }
 
     #endregion

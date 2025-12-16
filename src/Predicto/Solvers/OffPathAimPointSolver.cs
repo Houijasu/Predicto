@@ -30,7 +30,6 @@ public static class OffPathAimPointSolver
         {
             BehindEdgeStrategy.DirectBehind => CalculateDirectBehind(predictedPosition, targetVelocity, effectiveRadius),
             BehindEdgeStrategy.Tangent => CalculateTangentPoint(casterPosition, predictedPosition, targetVelocity, effectiveRadius),
-            BehindEdgeStrategy.OptimalAngle => CalculateOptimalAngle(casterPosition, predictedPosition, targetVelocity, effectiveRadius),
             BehindEdgeStrategy.Adaptive => CalculateAdaptive(casterPosition, predictedPosition, targetVelocity, effectiveRadius),
             _ => CalculateTangentPoint(casterPosition, predictedPosition, targetVelocity, effectiveRadius)
         };
@@ -115,79 +114,7 @@ public static class OffPathAimPointSolver
     }
 
     /// <summary>
-    /// Strategy 3: Optimal angle - uses continuous math to find the angle on the hitbox circle
-    /// that balances "behindness" (70%) and "accessibility" from caster (30%).
-    /// 
-    /// Instead of discrete sampling, this computes the optimal angle analytically by:
-    /// 1. Finding the caster's angle relative to target movement direction
-    /// 2. Clamping to the behind hemisphere [π/2, 3π/2]
-    /// 3. Blending between this angle and π (directly behind) using the 0.7/0.3 weights
-    /// 
-    /// This produces smooth, continuous transitions as positions change.
-    /// </summary>
-    private static Point2D CalculateOptimalAngle(
-        Point2D casterPosition,
-        Point2D predictedPosition,
-        Vector2D targetVelocity,
-        double effectiveRadius)
-    {
-        if (targetVelocity.Length < Constants.Epsilon)
-            return predictedPosition;
-
-        Vector2D moveDir = targetVelocity.Normalize();
-        
-        // Perpendicular to movement direction
-        Vector2D perpToMove = new Vector2D(-moveDir.Y, moveDir.X);
-
-        // Express caster position in the coordinate system centered at predicted position
-        // with moveDir as X-axis and perpToMove as Y-axis
-        Vector2D towardCaster = casterPosition - predictedPosition;
-        double casterAlongMove = towardCaster.DotProduct(moveDir);    // Cm
-        double casterAlongPerp = towardCaster.DotProduct(perpToMove); // Cp
-
-        // Calculate caster's angle in this coordinate system
-        // Angle 0 = movement direction, π = directly behind
-        double casterAngle = Math.Atan2(casterAlongPerp, casterAlongMove);
-
-        // Clamp to behind hemisphere [π/2, 3π/2]
-        // This ensures we never aim at the front of the target
-        double clampedAngle = ClampAngleToBehindHemisphere(casterAngle);
-
-        // Blend between clamped caster angle (accessibility) and π (directly behind)
-        // Using weights: 0.7 for behindness, 0.3 for accessibility
-        const double directBehindAngle = Math.PI;
-        const double behindWeight = 0.7;
-        double optimalAngle = clampedAngle + (directBehindAngle - clampedAngle) * behindWeight;
-
-        // Convert angle back to point on circle
-        double x = Math.Cos(optimalAngle);
-        double y = Math.Sin(optimalAngle);
-        return predictedPosition + moveDir * (x * effectiveRadius) + perpToMove * (y * effectiveRadius);
-    }
-
-    /// <summary>
-    /// Clamps an angle to the behind hemisphere [π/2, 3π/2].
-    /// Angles in the front hemisphere are clamped to the nearest edge.
-    /// </summary>
-    private static double ClampAngleToBehindHemisphere(double angle)
-    {
-        // Normalize to [-π, π]
-        while (angle > Math.PI) angle -= 2 * Math.PI;
-        while (angle < -Math.PI) angle += 2 * Math.PI;
-
-        // Behind hemisphere is where x < 0, i.e., angle in (π/2, 3π/2) or equivalently |angle| > π/2
-        if (Math.Abs(angle) >= Math.PI / 2)
-        {
-            // Already in behind hemisphere
-            return angle;
-        }
-
-        // In front hemisphere - clamp to nearest edge (π/2 or -π/2)
-        return angle >= 0 ? Math.PI / 2 : -Math.PI / 2;
-    }
-
-    /// <summary>
-    /// Strategy 4: Adaptive - returns the center point between Tangent and DirectBehind (trailing edge).
+    /// Strategy 3: Adaptive - returns the center point between Tangent and DirectBehind (trailing edge).
     /// This provides a balanced aim point that works well for all movement directions.
     /// The result is projected back onto the effective radius circle.
     /// </summary>
@@ -436,12 +363,6 @@ public enum BehindEdgeStrategy
     /// Geometrically optimal for edge clipping.
     /// </summary>
     Tangent,
-
-    /// <summary>
-    /// Search for optimal angle that balances behindness and hit reliability.
-    /// Most robust but slightly more expensive.
-    /// </summary>
-    OptimalAngle,
 
     /// <summary>
     /// Adaptive strategy: uses Tangent when target moves toward caster (faster intercept),

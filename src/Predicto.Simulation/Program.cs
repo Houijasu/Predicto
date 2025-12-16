@@ -459,17 +459,15 @@ float pathTotalTime = 0f;  // Total time elapsed on path during continuous firin
 PredictionResult? ultimateResult = null;
 PredictionResult? trailingEdgeResult = null;  // Pure trailing-edge prediction for comparison
 
-// Off-path aim point strategies (Tangent and OptimalAngle)
+// Off-path aim point strategies
 Point2D? tangentAimPoint = null;
-Point2D? optimalAngleAimPoint = null;
 Point2D? adaptiveAimPoint = null;
-int currentAimStrategy = 0;  // 0 = Default (behind), 1 = Tangent, 2 = OptimalAngle, 3 = Adaptive
-string[] aimStrategyNames = ["Default (Behind)", "Tangent", "Optimal Angle", "Adaptive"];
+int currentAimStrategy = 0;  // 0 = Default (behind), 1 = Tangent, 2 = Adaptive
+string[] aimStrategyNames = ["Default (Behind)", "Tangent", "Adaptive"];
 
 // Intercept times for each strategy (for display)
 double defaultInterceptTime = 0;
 double tangentInterceptTime = 0;
-double optimalAngleInterceptTime = 0;
 double adaptiveInterceptTime = 0;
 double trailingEdgeInterceptTime = 0;
 
@@ -747,11 +745,9 @@ while (!Raylib.WindowShouldClose())
 
         // Calculate off-path aim points and intercept times for visualization
         tangentAimPoint = null;
-        optimalAngleAimPoint = null;
         adaptiveAimPoint = null;
         defaultInterceptTime = 0;
         tangentInterceptTime = 0;
-        optimalAngleInterceptTime = 0;
         adaptiveInterceptTime = 0;
         trailingEdgeInterceptTime = 0;
         
@@ -780,11 +776,6 @@ while (!Raylib.WindowShouldClose())
                 input.CasterPosition, predictedPos, velocity, effectiveRadius,
                 BehindEdgeStrategy.Tangent);
             
-            // Calculate OptimalAngle aim point
-            optimalAngleAimPoint = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
-                input.CasterPosition, predictedPos, velocity, effectiveRadius,
-                BehindEdgeStrategy.OptimalAngle);
-            
             // Calculate Adaptive aim point (blends Tangent and DirectBehind based on movement direction)
             adaptiveAimPoint = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
                 input.CasterPosition, predictedPos, velocity, effectiveRadius,
@@ -797,14 +788,6 @@ while (!Raylib.WindowShouldClose())
                     input.CasterPosition, tangentAimPoint.Value, input.TargetPosition, velocity,
                     skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
                 tangentInterceptTime = trueTime ?? 0;
-            }
-            
-            if (optimalAngleAimPoint.HasValue)
-            {
-                var trueTime = OffPathAimPointSolver.CalculateTrueInterceptTime(
-                    input.CasterPosition, optimalAngleAimPoint.Value, input.TargetPosition, velocity,
-                    skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
-                optimalAngleInterceptTime = trueTime ?? 0;
             }
             
             if (adaptiveAimPoint.HasValue)
@@ -1232,7 +1215,7 @@ while (!Raylib.WindowShouldClose())
             Raylib.DrawLineEx(targetPos, trailingAim, 1.5f, new Color(80, 140, 255, 150));
         }
 
-        // Draw off-path aim point strategies (Tangent = Magenta, OptimalAngle = Orange)
+        // Draw off-path aim point strategies (Tangent = Magenta, Adaptive = Cyan)
         if (!isCircularMode && ultimateResult is PredictionResult.Hit)
         {
             // Tangent strategy - Magenta
@@ -1258,34 +1241,11 @@ while (!Raylib.WindowShouldClose())
                 }
             }
             
-            // OptimalAngle strategy - Orange
-            if (optimalAngleAimPoint.HasValue)
-            {
-                var optimalAim = new Vector2((float)optimalAngleAimPoint.Value.X, (float)optimalAngleAimPoint.Value.Y);
-                bool isOptimalActive = currentAimStrategy == 2;
-                
-                // Draw larger if active
-                float radius = isOptimalActive ? 10 : 6;
-                byte alpha = isOptimalActive ? (byte)255 : (byte)150;
-                byte alphaFill = (byte)(alpha * 0.8);
-                byte alphaLine = (byte)(alpha * 0.6);
-                
-                Raylib.DrawCircleV(optimalAim, radius, new Color((byte)255, (byte)180, (byte)50, alphaFill));
-                Raylib.DrawCircleLinesV(optimalAim, radius + 2, new Color((byte)255, (byte)180, (byte)50, alpha));
-                Raylib.DrawLineEx(targetPos, optimalAim, isOptimalActive ? 2.5f : 1.5f, new Color((byte)255, (byte)180, (byte)50, alphaLine));
-                
-                // Draw skillshot preview if active
-                if (isOptimalActive)
-                {
-                    DrawSkillshotPreview(casterPos, optimalAim, skillshotWidth, new Color(255, 180, 50, 30));
-                }
-            }
-            
             // Adaptive strategy - Cyan (blends Tangent and DirectBehind based on movement direction)
             if (adaptiveAimPoint.HasValue)
             {
                 var adaptiveAim = new Vector2((float)adaptiveAimPoint.Value.X, (float)adaptiveAimPoint.Value.Y);
-                bool isAdaptiveActive = currentAimStrategy == 3;
+                bool isAdaptiveActive = currentAimStrategy == 2;
                 
                 // Draw larger if active
                 float radius = isAdaptiveActive ? 10 : 6;
@@ -1482,7 +1442,7 @@ while (!Raylib.WindowShouldClose())
            currentPresetName, hitCount, missCount, camera.Zoom,
            timeLabels, currentTimeIndex, pathModeActive, waypoints.Count,
            currentAimStrategy, aimStrategyNames,
-           defaultInterceptTime, tangentInterceptTime, optimalAngleInterceptTime, adaptiveInterceptTime, trailingEdgeInterceptTime);
+           defaultInterceptTime, tangentInterceptTime, adaptiveInterceptTime, trailingEdgeInterceptTime);
 
     // Collision info overlay
     if (collisionDisplayTimer > 0)
@@ -1713,7 +1673,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
                   string presetName, int hits, int misses, float zoom,
                   string[] timeLabels, int currentTimeIndex, bool pathModeActive, int waypointCount,
                   int currentAimStrategy, string[] aimStrategyNames,
-                  double defaultInterceptTime, double tangentInterceptTime, double optimalAngleInterceptTime, double adaptiveInterceptTime, double trailingEdgeInterceptTime)
+                  double defaultInterceptTime, double tangentInterceptTime, double adaptiveInterceptTime, double trailingEdgeInterceptTime)
 {
     int y = 20;
     int lineHeight = 26;
@@ -1829,8 +1789,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     var strategyColor = currentAimStrategy switch
     {
         1 => new Color(255, 100, 255, 255),  // Magenta for Tangent
-        2 => new Color(255, 180, 50, 255),   // Orange for OptimalAngle
-        3 => new Color(0, 255, 255, 255),    // Cyan for Adaptive
+        2 => new Color(0, 255, 255, 255),    // Cyan for Adaptive
         _ => new Color(80, 255, 120, 255)    // Green for Default
     };
     Raylib.DrawTextEx(font, $"M : Aim Strategy [{aimStrategyNames[currentAimStrategy]}]", new Vector2(20, ctrlY), smallFont, spacing, strategyColor);
@@ -1856,25 +1815,21 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(255, 100, 255, 200));
         Raylib.DrawTextEx(font, "Tangent", new Vector2(50, legendY), smallFont, spacing, new Color(255, 100, 255, 255));
         
-        // Orange - OptimalAngle
-        Raylib.DrawCircleV(new Vector2(180, legendY + 8), 5, new Color(255, 180, 50, 200));
-        Raylib.DrawTextEx(font, "Optimal Angle", new Vector2(200, legendY), smallFont, spacing, new Color(255, 180, 50, 255));
+        // Cyan - Adaptive
+        Raylib.DrawCircleV(new Vector2(180, legendY + 8), 5, new Color(0, 220, 220, 200));
+        Raylib.DrawTextEx(font, "Adaptive", new Vector2(200, legendY), smallFont, spacing, new Color(0, 255, 255, 255));
         
         legendY += 22;
-        // Cyan - Adaptive
-        Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(0, 220, 220, 200));
-        Raylib.DrawTextEx(font, "Adaptive", new Vector2(50, legendY), smallFont, spacing, new Color(0, 255, 255, 255));
-        
         // Blue trailing edge
-        Raylib.DrawCircleV(new Vector2(180, legendY + 8), 5, new Color(80, 140, 255, 200));
-        Raylib.DrawTextEx(font, "Trailing Edge", new Vector2(200, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
+        Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(80, 140, 255, 200));
+        Raylib.DrawTextEx(font, "Trailing Edge", new Vector2(50, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
     }
     
     // Intercept Times Table (only in linear mode)
     if (!isCircularMode)
     {
         int tableY = legendY + 35;
-        int tableHeight = 142;
+        int tableHeight = 120;
         Raylib.DrawRectangle(10, tableY, 380, tableHeight, new Color(0, 0, 0, 200));
         Raylib.DrawRectangleLines(10, tableY, 380, tableHeight, new Color(80, 80, 100, 255));
         
@@ -1895,13 +1850,6 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(255, 100, 255, 200));
         Raylib.DrawTextEx(font, "Tangent:", new Vector2(50, tableY), fontSize, spacing, new Color(255, 100, 255, 255));
         Raylib.DrawTextEx(font, FormatTime(tangentInterceptTime), new Vector2(160, tableY), fontSize, spacing, Color.White);
-        
-        tableY += 22;
-        
-        // OptimalAngle (Orange)
-        Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(255, 180, 50, 200));
-        Raylib.DrawTextEx(font, "Optimal:", new Vector2(50, tableY), fontSize, spacing, new Color(255, 180, 50, 255));
-        Raylib.DrawTextEx(font, FormatTime(optimalAngleInterceptTime), new Vector2(160, tableY), fontSize, spacing, Color.White);
         
         tableY += 22;
         
