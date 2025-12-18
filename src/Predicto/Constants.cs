@@ -44,6 +44,12 @@ public static class Constants
     public const double DefaultHitboxRadius = 65.0;
 
     /// <summary>
+    /// Default caster hitbox radius in units.
+    /// Used for origin offset in minimal time calculations.
+    /// </summary>
+    public const double DefaultCasterHitboxRadius = 65.0;
+
+    /// <summary>
     /// Pixel margin for trailing edge collision (1 game unit ≈ 1 pixel).
     /// Used to hit target "from behind" - just barely inside collision zone.
     /// </summary>

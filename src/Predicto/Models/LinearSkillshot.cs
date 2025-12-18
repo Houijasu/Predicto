@@ -14,6 +14,20 @@ public readonly record struct LinearSkillshot(
     double Width,
     double Delay)
 {
+
+    /// <summary>
+    /// Threshold for considering a skillshot as "hitscan" (instant beam).
+    /// Any speed above this value is treated as instant.
+    /// </summary>
+    private const double HitscanSpeedThreshold = 1_000_000;
+
+    /// <summary>
+    /// Returns true if this skillshot is a hitscan/instant beam (Speed >= threshold or MaxValue).
+    /// Hitscan skillshots fire instantly after cast delay with no travel time.
+    /// Examples: Lux R, Xerath Q.
+    /// </summary>
+    public bool IsHitscan => Speed >= HitscanSpeedThreshold || double.IsPositiveInfinity(Speed);
+
     /// <summary>
     /// Creates a LinearSkillshot with common defaults.
     /// </summary>

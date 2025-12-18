@@ -427,6 +427,201 @@ public class UltimateTests
         Assert.IsType<PredictionResult.Unreachable>(result);
     }
 
+
+    #region Hitscan Tests
+
+    [Fact]
+    public void Hitscan_LuxR_IsHitscan()
+    {
+        Assert.True(LinearSkillshot.LuxR.IsHitscan);
+    }
+
+    [Fact]
+    public void Hitscan_XerathQ_IsHitscan()
+    {
+        Assert.True(LinearSkillshot.XerathQ.IsHitscan);
+    }
+
+    [Fact]
+    public void Hitscan_NormalSkillshot_IsNotHitscan()
+    {
+        Assert.False(LinearSkillshot.BlitzcrankQ.IsHitscan);
+        Assert.False(LinearSkillshot.MorganaQ.IsHitscan);
+        Assert.False(LinearSkillshot.EzrealQ.IsHitscan);
+    }
+
+    [Fact]
+    public void Hitscan_StationaryTarget_DirectHit()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: LinearSkillshot.LuxR);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.Equal(500, hit.CastPosition.X, precision: 1);
+        Assert.Equal(0, hit.CastPosition.Y, precision: 1);
+        // Intercept time should equal cast delay (1.0s for Lux R)
+        Assert.Equal(1.0, hit.InterceptTime, precision: 3);
+        Assert.True(hit.Confidence > 0.9); // High confidence for stationary
+    }
+
+    [Fact]
+    public void Hitscan_MovingTarget_AimsAtPredictedPosition()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 300), // Moving perpendicular
+            Skillshot: LinearSkillshot.LuxR); // 1.0s delay
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        // Target will move 300 units in Y direction during 1.0s delay
+        Assert.True(hit.PredictedTargetPosition.Y > 250); // Should predict movement
+        Assert.Equal(1.0, hit.InterceptTime, precision: 3); // Always equals delay for hitscan
+    }
+
+    [Fact]
+    public void Hitscan_MovingTarget_BehindTargetAiming()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(300, 0), // Moving away
+            Skillshot: LinearSkillshot.XerathQ); // 0.5s delay
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        // Predicted position after 0.5s delay: 500 + 300*0.5 = 650
+        Assert.True(hit.PredictedTargetPosition.X > 500);
+        // Aim point should be behind the predicted position (less X)
+        Assert.True(hit.CastPosition.X < hit.PredictedTargetPosition.X);
+    }
+
+    [Fact]
+    public void Hitscan_OutOfRange_ReturnsOutOfRange()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(4000, 0), // Beyond Lux R range (3400)
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: LinearSkillshot.LuxR);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.OutOfRange>(result);
+    }
+
+    [Fact]
+    public void Hitscan_MovesOutOfRange_ReturnsOutOfRange()
+    {
+        // Target starts in range but moves out before beam fires
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(3300, 0), // Close to Lux R range
+            TargetVelocity: new Vector2D(500, 0), // Moving away
+            Skillshot: LinearSkillshot.LuxR); // 1.0s delay -> moves 500 units
+
+        var result = _prediction.Predict(input);
+
+        // After 1s delay, target at 3800 which is beyond 3400 range
+        Assert.IsType<PredictionResult.OutOfRange>(result);
+    }
+
+    [Fact]
+    public void Hitscan_InterceptTimeEqualsDelay()
+    {
+        // For hitscan, intercept time = cast delay (no travel time)
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(1000, 0),
+            TargetVelocity: new Vector2D(100, 0),
+            Skillshot: LinearSkillshot.XerathQ); // 0.5s delay
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.Equal(LinearSkillshot.XerathQ.Delay, hit.InterceptTime, precision: 5);
+    }
+
+    [Fact]
+    public void Hitscan_FasterThanProjectile()
+    {
+        // Compare hitscan vs projectile intercept times
+        var caster = new Point2D(0, 0);
+        var target = new Point2D(1000, 0);
+        var velocity = new Vector2D(200, 0);
+
+        // Hitscan (Lux R)
+        var hitscanInput = new PredictionInput(caster, target, velocity, LinearSkillshot.LuxR);
+        var hitscanResult = _prediction.Predict(hitscanInput);
+
+        // Projectile (Morgana Q - similar range, but has travel time)
+        var projectileInput = new PredictionInput(caster, target, velocity, LinearSkillshot.MorganaQ);
+        var projectileResult = _prediction.Predict(projectileInput);
+
+        Assert.IsType<PredictionResult.Hit>(hitscanResult);
+        Assert.IsType<PredictionResult.Hit>(projectileResult);
+
+        var hitscanHit = (PredictionResult.Hit)hitscanResult;
+        var projectileHit = (PredictionResult.Hit)projectileResult;
+
+        // Hitscan should have faster (or equal) intercept time
+        Assert.True(hitscanHit.InterceptTime <= projectileHit.InterceptTime);
+    }
+
+    [Fact]
+    public void Hitscan_WithPath_WorksCorrectly()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(500, 0),
+            destination: new Point2D(500, 1000),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: LinearSkillshot.LuxR,
+            targetHitboxRadius: 65);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        // After 1.0s delay, target should have moved 350 units towards waypoint
+        Assert.True(hit.PredictedTargetPosition.Y > 300);
+        Assert.Equal(1.0, hit.InterceptTime, precision: 3);
+    }
+
+    [Fact]
+    public void Hitscan_HighConfidenceForInstantHits()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(100, 0), // Slow movement
+            Skillshot: LinearSkillshot.XerathQ);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        // Hitscan should have reasonable confidence (boosted by 1.1x)
+        Assert.True(hit.Confidence > 0.5);
+    }
+
+    #endregion
+
     // === Performance Benchmark ===
 
     [Fact]
@@ -742,7 +937,8 @@ public class UltimateTests
     public void PathEndBlending_LongPathRemaining_AimsBehindTarget()
     {
         var casterPos = new Point2D(0, 0);
-        // Target moving right with a long path remaining (2000 units at 400 speed = 5 seconds)
+        // Target moving right from (400,0) to (2400,0) at 400 speed
+        // Intercept will happen quickly, leaving plenty of path remaining
         var path = TargetPath.FromDestination(
             currentPosition: new Point2D(400, 0),
             destination: new Point2D(2400, 0),
@@ -752,7 +948,8 @@ public class UltimateTests
             casterPos,
             path,
             new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
-            targetHitboxRadius: 65);
+            targetHitboxRadius: 65,
+            minimizeTime: false);
 
         var result = _prediction.Predict(input);
 

@@ -308,6 +308,206 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
+    /// Solves for hitscan/instant beam interception.
+    /// 
+    /// Mathematical model:
+    /// - After castDelay, the beam exists INSTANTLY from caster to Range along an aim direction
+    /// - Collision occurs when target's hitbox circle is within (width/2) distance from beam line
+    /// - The earliest possible hit is at t = castDelay if target is within range
+    /// 
+    /// For hitscan, the intercept time is simply castDelay (the beam fires instantly).
+    /// The aim point is the target's predicted position at castDelay.
+    /// 
+    /// Edge collision model: target center must be within (targetRadius + width/2) of beam centerline.
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="targetPosition">Current position of the target</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="castDelay">Delay before beam fires (seconds)</param>
+    /// <param name="targetHitboxRadius">Radius of target's hitbox</param>
+    /// <param name="beamWidth">Width of the beam</param>
+    /// <param name="beamRange">Maximum range of the beam</param>
+    /// <returns>Tuple of (AimPoint, PredictedTargetPosition, InterceptTime) or null if unreachable</returns>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveHitscanIntercept(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double castDelay,
+        double targetHitboxRadius,
+        double beamWidth,
+        double beamRange)
+    {
+        // Input validation
+        if (castDelay < 0)
+            throw new ArgumentException($"Cast delay cannot be negative, got {castDelay}", nameof(castDelay));
+        ValidateCollisionInputs(targetHitboxRadius, beamWidth);
+        if (beamRange <= 0)
+            throw new ArgumentException($"Beam range must be positive, got {beamRange}", nameof(beamRange));
+
+        // Effective collision radius: beam edge touches target edge
+        double effectiveRadius = targetHitboxRadius + beamWidth / 2;
+
+        // Predict target position at cast delay (when beam fires)
+        Point2D predictedPos = CalculatePredictedPosition(targetPosition, targetVelocity, castDelay);
+
+        // Check if target is within range at fire time
+        var displacement = predictedPos - casterPosition;
+        double distance = displacement.Length;
+
+        // For hitscan, we can hit if target center is within (range + effectiveRadius)
+        // because beam edge can still touch target edge
+        if (distance > beamRange + effectiveRadius)
+        {
+            return null; // Target out of range
+        }
+
+        // The aim point is the predicted target position at cast delay
+        // The beam fires instantly, so intercept time = castDelay
+        return (predictedPos, predictedPos, castDelay);
+    }
+
+    /// <summary>
+    /// Solves for hitscan/instant beam interception with "behind target" aiming.
+    /// 
+    /// For hitscan beams, we aim at the trailing edge of the target's hitbox
+    /// to maximize hit probability (target moving into the beam).
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="targetPosition">Current position of the target</param>
+    /// <param name="targetVelocity">Target's velocity vector</param>
+    /// <param name="castDelay">Delay before beam fires (seconds)</param>
+    /// <param name="targetHitboxRadius">Radius of target's hitbox</param>
+    /// <param name="beamWidth">Width of the beam</param>
+    /// <param name="beamRange">Maximum range of the beam</param>
+    /// <param name="behindMargin">Safety margin behind target (default 1.0)</param>
+    /// <returns>Tuple of (AimPoint, PredictedTargetPosition, InterceptTime) or null if unreachable</returns>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveHitscanBehindTarget(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double castDelay,
+        double targetHitboxRadius,
+        double beamWidth,
+        double beamRange,
+        double behindMargin = 1.0)
+    {
+        // Input validation
+        if (castDelay < 0)
+            throw new ArgumentException($"Cast delay cannot be negative, got {castDelay}", nameof(castDelay));
+        ValidateCollisionInputs(targetHitboxRadius, beamWidth);
+        if (beamRange <= 0)
+            throw new ArgumentException($"Beam range must be positive, got {beamRange}", nameof(beamRange));
+        if (behindMargin < 0)
+            throw new ArgumentException($"Behind margin cannot be negative, got {behindMargin}", nameof(behindMargin));
+
+        double effectiveRadius = targetHitboxRadius + beamWidth / 2;
+
+        // Predict target position at cast delay
+        Point2D predictedPos = CalculatePredictedPosition(targetPosition, targetVelocity, castDelay);
+
+        // Check range
+        var displacement = predictedPos - casterPosition;
+        double distance = displacement.Length;
+
+        if (distance > beamRange + effectiveRadius)
+        {
+            return null; // Target out of range
+        }
+
+        // For stationary targets, aim at center
+        if (targetVelocity.Length < Constants.MinVelocity)
+        {
+            return (predictedPos, predictedPos, castDelay);
+        }
+
+        // Calculate behind offset
+        double behindDistance = effectiveRadius - behindMargin;
+        if (behindDistance < Constants.Epsilon)
+        {
+            behindDistance = effectiveRadius * 0.5;
+        }
+
+        Vector2D moveDirection = targetVelocity.Normalize();
+        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
+
+        // Aim point is behind the predicted position
+        Point2D aimPoint = predictedPos + behindOffset;
+
+        // Verify aim point is within range
+        double aimDistance = (aimPoint - casterPosition).Length;
+        if (aimDistance > beamRange)
+        {
+            // Fall back to center aim if behind-aim is out of range
+            return (predictedPos, predictedPos, castDelay);
+        }
+
+        return (aimPoint, predictedPos, castDelay);
+    }
+
+    /// <summary>
+    /// Solves for hitscan intercept when target is following a multi-waypoint path.
+    /// Returns the aim point and intercept time for an instant beam.
+    /// </summary>
+    public static PathInterceptResult? SolveHitscanPathIntercept(
+        Point2D casterPosition,
+        TargetPath path,
+        double castDelay,
+        double targetHitboxRadius,
+        double beamWidth,
+        double beamRange)
+    {
+        if (castDelay < 0)
+            throw new ArgumentException($"Cast delay cannot be negative, got {castDelay}", nameof(castDelay));
+        ValidateCollisionInputs(targetHitboxRadius, beamWidth);
+        if (beamRange <= 0)
+            throw new ArgumentException($"Beam range must be positive, got {beamRange}", nameof(beamRange));
+
+        double effectiveRadius = targetHitboxRadius + beamWidth / 2;
+
+        // Get target position at cast delay
+        Point2D predictedPos = path.GetPositionAtTime(castDelay);
+
+        // Check if within range
+        var displacement = predictedPos - casterPosition;
+        double distance = displacement.Length;
+
+        if (distance > beamRange + effectiveRadius)
+        {
+            return null; // Target out of range at fire time
+        }
+
+        // Find which waypoint segment the target will be on at castDelay
+        int waypointIndex = 0;
+        double remainingDistance = path.Speed * castDelay;
+        var position = path.CurrentPosition;
+
+        while (remainingDistance > 0 && waypointIndex < path.Waypoints.Count)
+        {
+            var target = path.Waypoints[waypointIndex];
+            var distToWaypoint = (target - position).Length;
+
+            if (distToWaypoint <= remainingDistance)
+            {
+                position = target;
+                remainingDistance -= distToWaypoint;
+                waypointIndex++;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Clamp to valid range
+        if (waypointIndex >= path.Waypoints.Count)
+        {
+            waypointIndex = path.Waypoints.Count - 1;
+        }
+
+        return new PathInterceptResult(predictedPos, predictedPos, castDelay, waypointIndex);
+    }
+
+    /// <summary>
     /// Calculates the predicted position at the given interception time.
     /// </summary>
     public static Point2D CalculatePredictedPosition(
@@ -2271,6 +2471,190 @@ public sealed class InterceptSolver
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Solves the absolute minimal interception time for a path-based target.
+    /// Incorporates Suggestions 1 (Global Path), 2 (Rectangular), and 3 (Caster Offset).
+    /// </summary>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, int WaypointIndex)? SolvePathMinimalIntercept(
+        Point2D casterPosition,
+        TargetPath path,
+        double skillshotSpeed,
+        double castDelay,
+        double targetRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double casterRadius)
+    {
+        // Suggestion 3: Caster Offset reduces effective travel distance
+        // Sug 2: Front-line collision saves skillshotWidth/2 distance compared to circle model
+        // Combined effective radius for minimal contact
+        double effectiveRadius = targetRadius + casterRadius;
+
+        // Effective delay: when projectile reaches caster edge (t = delay - R_caster/speed)
+        // But it only starts moving at t = delay.
+        // We solve: speed * (t - delay) = dist - casterRadius - targetRadius
+        // Which is: speed * (t - delay) + casterRadius + targetRadius = |P(t) - C|
+        double combinedR = targetRadius + casterRadius;
+        double speed = skillshotSpeed;
+        double delay = castDelay;
+
+        // Handle case where target is already within collision radius at cast delay
+        Point2D posAtDelay = path.GetPositionAtTime(delay);
+        if ((posAtDelay - casterPosition).Length <= combinedR)
+        {
+            return (posAtDelay, posAtDelay, delay, path.CurrentWaypointIndex);
+        }
+
+        // Suggestion 1: Global Path Root-Finding
+        // We find the first root of f(t) = |P(t) - C| - (s*(t-delay) + combinedR)
+        Func<double, double> collisionFunc = t =>
+        {
+            Point2D pos = path.GetPositionAtTime(t);
+            double dist = (pos - casterPosition).Length;
+            double travel = speed * Math.Max(0, t - delay) + combinedR;
+            return dist - travel;
+        };
+
+        double remainingTime = path.GetRemainingPathTime();
+        double maxT = delay + (skillshotRange + combinedR) / speed;
+        double scanEnd = Math.Min(maxT, remainingTime + 1.0);
+
+        // Scan segments for roots
+        double prevT = 0;
+        double prevVal = collisionFunc(0);
+
+        // Step size for scanning: half a tick
+        double step = Constants.TickDuration * 0.5;
+
+        for (double t = step; t <= scanEnd + step; t += step)
+        {
+            double currentT = Math.Min(t, scanEnd);
+            double currentVal = collisionFunc(currentT);
+
+            if (prevVal * currentVal <= 0)
+            {
+                // Root bracketed between [prevT, currentT]
+                if (Brent.TryFindRoot(collisionFunc, prevT, currentT, Constants.Epsilon, 100, out double hitTime))
+                {
+                    Point2D hitPos = path.GetPositionAtTime(hitTime);
+                    
+                    // Verify range
+                    double travelDist = speed * (hitTime - delay);
+                    if (travelDist <= skillshotRange + Constants.RangeTolerance)
+                    {
+                        // Waypoint index at hit time
+                        int wpIdx = path.CurrentWaypointIndex;
+                        double d = 0;
+                        for (int i = 0; i < path.SegmentCount; i++)
+                        {
+                            var seg = path.GetSegment(i);
+                            double segTime = seg.Length / path.Speed;
+                            if (d + segTime >= hitTime - Constants.Epsilon)
+                            {
+                                wpIdx = seg.WaypointIndex;
+                                break;
+                            }
+                            d += segTime;
+                        }
+
+                        return (hitPos, hitPos, hitTime, wpIdx);
+                    }
+                }
+            }
+
+            prevT = currentT;
+            prevVal = currentVal;
+            if (t > scanEnd) break;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Solves the absolute minimal interception time for a linear velocity target.
+    /// Incorporates Suggestions 2 (Rectangular) and 3 (Caster Offset).
+    /// </summary>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveMinimalInterceptDirect(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double skillshotSpeed,
+        double castDelay,
+        double targetRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double casterRadius)
+    {
+        // Sug 3: Caster Offset + Sug 2: Rectangular front
+        // Effective combined radius for minimal contact
+        double combinedR = targetRadius + casterRadius;
+        
+        // Solve: |P + V*t - C| = s*(t - delay) + combinedR
+        // Let D = P - C, d = delay, s = skillshotSpeed, r = combinedR
+        // |D + V*t| = s*(t - d) + r
+        // |D + V*t| = s*t - (s*d - r)
+        // Let K = s*d - r
+        // |D + V*t| = s*t - K
+        // (D + V*t)^2 = (s*t - K)^2
+        // D^2 + 2(D.V)t + V^2 t^2 = s^2 t^2 - 2sKt + K^2
+        // (V^2 - s^2)t^2 + (2(D.V) + 2sK)t + (D^2 - K^2) = 0
+
+        double s = skillshotSpeed;
+        double K = s * castDelay - combinedR;
+        
+        var D = targetPosition - casterPosition;
+        var V = targetVelocity;
+
+        // Handle case where target is already within collision radius at cast delay
+        Point2D posAtDelay = targetPosition + targetVelocity * castDelay;
+        if ((posAtDelay - casterPosition).Length <= combinedR)
+        {
+            return (posAtDelay, posAtDelay, castDelay);
+        }
+        
+        double a = V.DotProduct(V) - s * s;
+        double b = 2 * D.DotProduct(V) + 2 * s * K;
+        double c = D.DotProduct(D) - K * K;
+
+        double? bestT = null;
+        if (Math.Abs(a) < Constants.Epsilon)
+        {
+            if (Math.Abs(b) > Constants.Epsilon)
+            {
+                double t = -c / b;
+                if (t >= castDelay) bestT = t;
+            }
+        }
+        else
+        {
+            double disc = b * b - 4 * a * c;
+            if (disc >= 0)
+            {
+                double sqrtDisc = Math.Sqrt(disc);
+                double t1 = (-b - sqrtDisc) / (2 * a);
+                double t2 = (-b + sqrtDisc) / (2 * a);
+
+                bool v1 = t1 >= castDelay - Constants.Epsilon;
+                bool v2 = t2 >= castDelay - Constants.Epsilon;
+
+                if (v1 && v2) bestT = Math.Min(t1, t2);
+                else if (v1) bestT = t1;
+                else if (v2) bestT = t2;
+            }
+        }
+
+        if (!bestT.HasValue) return null;
+
+        double tResult = bestT.Value;
+        Point2D hitPos = targetPosition + targetVelocity * tResult;
+        
+        // Range check
+        double travelDist = s * (tResult - castDelay);
+        if (travelDist > skillshotRange + Constants.RangeTolerance) return null;
+
+        return (hitPos, hitPos, tResult);
     }
 
     /// <summary>

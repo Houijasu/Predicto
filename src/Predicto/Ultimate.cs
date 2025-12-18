@@ -95,6 +95,13 @@ public sealed class Ultimate : IPrediction
         if (path.Speed > Constants.MaxReasonableVelocity)
             return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
 
+        // === Hitscan Fast Path ===
+        // For instant beams (Lux R, Xerath Q, etc.), use dedicated hitscan solver
+        if (input.Skillshot.IsHitscan)
+        {
+            return PredictHitscanWithPath(input);
+        }
+
         if (input.Skillshot.Speed > Constants.MaxReasonableSkillshotSpeed)
             return new PredictionResult.Unreachable("Skillshot speed exceeds reasonable bounds");
 
@@ -123,6 +130,52 @@ public sealed class Ultimate : IPrediction
         if (path.Speed < Constants.MinVelocity)
         {
             return PredictStationary(input, distance, effectiveRadius);
+        }
+
+        // Sug 6: Disable Path-End Blending and use Minimal Solver if requested
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, int WaypointIndex)? mResult = null;
+
+        if (input.MinimizeTime)
+        {
+            mResult = InterceptSolver.SolvePathMinimalIntercept(
+                input.CasterPosition,
+                path,
+                input.Skillshot.Speed,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                input.CasterHitboxRadius);
+        }
+
+        if (mResult.HasValue)
+        {
+            var hit = mResult.Value;
+            
+            // Still calculate confidence and range correctly
+            double mFlightTime = Math.Max(0, hit.InterceptTime - input.Skillshot.Delay);
+            double mTravelDistance = input.Skillshot.Speed * mFlightTime;
+
+            if (mTravelDistance > input.Skillshot.Range + Constants.RangeTolerance)
+            {
+                return new PredictionResult.OutOfRange(mTravelDistance, input.Skillshot.Range);
+            }
+
+            double mConfidence = CalculateEnhancedConfidence(
+                hit.InterceptTime,
+                distance,
+                path.Speed,
+                input.Skillshot.Speed,
+                input.Skillshot.Range,
+                input.Skillshot.Delay,
+                displacement,
+                currentVelocity);
+
+            return new PredictionResult.Hit(
+                CastPosition: hit.AimPoint,
+                PredictedTargetPosition: hit.PredictedTargetPosition,
+                InterceptTime: hit.InterceptTime,
+                Confidence: mConfidence);
         }
 
         // === Calculate Adaptive Margin with Path-End Blending ===
@@ -320,6 +373,14 @@ public sealed class Ultimate : IPrediction
     private PredictionResult PredictWithVelocity(PredictionInput input)
     {
         // === Velocity Sanity Checks ===
+
+        // === Hitscan Fast Path ===
+        // For instant beams (Lux R, Xerath Q, etc.), use dedicated hitscan solver
+        if (input.Skillshot.IsHitscan)
+        {
+            return PredictHitscan(input);
+        }
+
         double targetSpeed = input.TargetVelocity.Length;
         if (targetSpeed > Constants.MaxReasonableVelocity)
             return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
@@ -373,23 +434,42 @@ public sealed class Ultimate : IPrediction
             return PredictStationary(input, distance, effectiveRadius);
         }
 
-        // === Calculate Adaptive Margin ===
-        // Use half of spell width as base margin for more reliable hits
-        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+        // Sug 6: Minimal Interception for velocity mode
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = null;
 
-        // === Solve BEHIND-TARGET Interception (Direct Closed-Form) ===
-        // We aim slightly inside the target's trailing edge (behind their movement).
-        // The behind-point moves linearly, so interception uses a quadratic solve.
-        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = InterceptSolver.SolveBehindTargetDirect(
-            input.CasterPosition,
-            input.TargetPosition,
-            input.TargetVelocity,
-            input.Skillshot.Speed,
-            input.Skillshot.Delay,
-            input.TargetHitboxRadius,
-            input.Skillshot.Width,
-            input.Skillshot.Range,
-            behindMargin: adaptiveMargin);
+        if (input.MinimizeTime)
+        {
+            result = InterceptSolver.SolveMinimalInterceptDirect(
+                input.CasterPosition,
+                input.TargetPosition,
+                input.TargetVelocity,
+                input.Skillshot.Speed,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                input.CasterHitboxRadius);
+        }
+        else
+        {
+            // === Calculate Adaptive Margin ===
+            // Use half of spell width as base margin for more reliable hits
+            double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+
+            // === Solve BEHIND-TARGET Interception (Direct Closed-Form) ===
+            // We aim slightly inside the target's trailing edge (behind their movement).
+            // The behind-point moves linearly, so interception uses a quadratic solve.
+            result = InterceptSolver.SolveBehindTargetDirect(
+                input.CasterPosition,
+                input.TargetPosition,
+                input.TargetVelocity,
+                input.Skillshot.Speed,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                behindMargin: adaptiveMargin);
+        }
 
         if (!result.HasValue)
         {
@@ -427,6 +507,172 @@ public sealed class Ultimate : IPrediction
             PredictedTargetPosition: predictedTargetPos,
             InterceptTime: interceptTime,
             Confidence: confidence);
+    }
+
+    /// <summary>
+    /// Hitscan prediction for instant beams (Lux R, Xerath Q, etc.).
+    /// After cast delay, the beam exists instantly from caster to range.
+    /// Intercept time = castDelay (no projectile travel time).
+    /// </summary>
+    private PredictionResult PredictHitscan(PredictionInput input)
+    {
+        // === Geometry Setup ===
+        var displacement = input.TargetPosition - input.CasterPosition;
+        double distance = displacement.Length;
+        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+
+        // === Stationary Target Optimization ===
+        double targetSpeed = input.TargetVelocity.Length;
+        if (targetSpeed < Constants.MinVelocity)
+        {
+            // For stationary targets, just check range
+            if (distance > input.Skillshot.Range + effectiveRadius)
+            {
+                return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
+            }
+
+            return new PredictionResult.Hit(
+                CastPosition: input.TargetPosition,
+                PredictedTargetPosition: input.TargetPosition,
+                InterceptTime: input.Skillshot.Delay,
+                Confidence: 1.0);
+        }
+
+        // === Calculate Adaptive Margin ===
+        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+
+        // === Solve Hitscan Interception ===
+        var result = InterceptSolver.SolveHitscanBehindTarget(
+            input.CasterPosition,
+            input.TargetPosition,
+            input.TargetVelocity,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Width,
+            input.Skillshot.Range,
+            behindMargin: adaptiveMargin);
+
+        if (!result.HasValue)
+        {
+            // Check if it's a range issue
+            Point2D predictedPos = input.TargetPosition + input.TargetVelocity * input.Skillshot.Delay;
+            double predictedDistance = (predictedPos - input.CasterPosition).Length;
+
+            if (predictedDistance > input.Skillshot.Range + effectiveRadius)
+            {
+                return new PredictionResult.OutOfRange(predictedDistance - effectiveRadius, input.Skillshot.Range);
+            }
+
+            return new PredictionResult.Unreachable("No valid hitscan interception solution exists");
+        }
+
+        var (aimPoint, predictedTargetPos, interceptTime) = result.Value;
+
+        // === Calculate Confidence ===
+        // Hitscan has higher base confidence due to instant travel
+        // But still apply distance and velocity penalties
+        double confidence = CalculateEnhancedConfidence(
+            interceptTime,
+            distance,
+            targetSpeed,
+            double.MaxValue, // Treat as infinite speed for confidence calculation
+            input.Skillshot.Range,
+            input.Skillshot.Delay,
+            displacement,
+            input.TargetVelocity);
+
+        // Boost confidence slightly for hitscan (more reliable due to no travel time)
+        confidence = Math.Min(1.0, confidence * 1.1);
+
+        return new PredictionResult.Hit(
+            CastPosition: aimPoint,
+            PredictedTargetPosition: predictedTargetPos,
+            InterceptTime: interceptTime,
+            Confidence: confidence);
+    }
+
+    /// <summary>
+    /// Hitscan prediction for path-based movement.
+    /// For instant beams (Lux R, Xerath Q, etc.) when target has a known movement path.
+    /// </summary>
+    private PredictionResult PredictHitscanWithPath(PredictionInput input)
+    {
+        var path = input.TargetPath!;
+
+        // === Geometry Setup ===
+        var displacement = path.CurrentPosition - input.CasterPosition;
+        double distance = displacement.Length;
+        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+
+        // === Stationary Target Optimization ===
+        if (path.Speed < Constants.MinVelocity)
+        {
+            // For stationary targets, just check range
+            if (distance > input.Skillshot.Range + effectiveRadius)
+            {
+                return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
+            }
+
+            return new PredictionResult.Hit(
+                CastPosition: path.CurrentPosition,
+                PredictedTargetPosition: path.CurrentPosition,
+                InterceptTime: input.Skillshot.Delay,
+                Confidence: 1.0);
+        }
+
+        // === Solve Hitscan Path Interception ===
+        var result = InterceptSolver.SolveHitscanPathIntercept(
+            input.CasterPosition,
+            path,
+            input.Skillshot.Delay,
+            input.TargetHitboxRadius,
+            input.Skillshot.Width,
+            input.Skillshot.Range);
+
+        if (!result.HasValue)
+        {
+            // Check if it's a range issue
+            Point2D predictedPos = path.GetPositionAtTime(input.Skillshot.Delay);
+            double predictedDistance = (predictedPos - input.CasterPosition).Length;
+
+            if (predictedDistance > input.Skillshot.Range + effectiveRadius)
+            {
+                return new PredictionResult.OutOfRange(predictedDistance - effectiveRadius, input.Skillshot.Range);
+            }
+
+            return new PredictionResult.Unreachable("No valid hitscan interception solution exists along target path");
+        }
+
+        var interceptResult = result.Value;
+
+        // === Calculate Confidence ===
+        var currentVelocity = path.GetCurrentVelocity();
+        double confidence = CalculateEnhancedConfidence(
+            interceptResult.InterceptTime,
+            distance,
+            path.Speed,
+            double.MaxValue, // Treat as infinite speed for confidence calculation
+            input.Skillshot.Range,
+            input.Skillshot.Delay,
+            displacement,
+            currentVelocity);
+
+        // === Confidence Penalty for Late Waypoints ===
+        if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
+        {
+            int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
+            double waypointPenalty = Math.Pow(0.5, waypointDelta);
+            confidence *= waypointPenalty;
+        }
+
+        // Boost confidence slightly for hitscan (more reliable due to no travel time)
+        confidence = Math.Min(1.0, confidence * 1.1);
+
+        return new PredictionResult.Hit(
+            CastPosition: interceptResult.AimPoint,
+            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
+            InterceptTime: interceptResult.InterceptTime,
+            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
     }
 
     /// <summary>

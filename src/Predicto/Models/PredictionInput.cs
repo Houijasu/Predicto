@@ -17,8 +17,10 @@ public readonly record struct PredictionInput(
     Point2D TargetPosition,
     Vector2D TargetVelocity,
     LinearSkillshot Skillshot,
-    double TargetHitboxRadius = 65.0,
-    TargetPath? TargetPath = null)
+    double TargetHitboxRadius = Constants.DefaultHitboxRadius,
+    TargetPath? TargetPath = null,
+    double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
+    bool MinimizeTime = false)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.
@@ -42,7 +44,9 @@ public readonly record struct PredictionInput(
         Point2D casterPosition,
         TargetPath path,
         LinearSkillshot skillshot,
-        double targetHitboxRadius = 65.0)
+        double targetHitboxRadius = Constants.DefaultHitboxRadius,
+        double casterHitboxRadius = Constants.DefaultCasterHitboxRadius,
+        bool minimizeTime = false)
     {
         return new PredictionInput(
             casterPosition,
@@ -50,7 +54,9 @@ public readonly record struct PredictionInput(
             path.GetCurrentVelocity(),
             skillshot,
             targetHitboxRadius,
-            path);
+            path,
+            casterHitboxRadius,
+            minimizeTime);
     }
 }
 
@@ -69,8 +75,10 @@ public readonly record struct CircularPredictionInput(
     Point2D TargetPosition,
     Vector2D TargetVelocity,
     CircularSkillshot Skillshot,
-    double TargetHitboxRadius = 65.0,
-    TargetPath? TargetPath = null)
+    double TargetHitboxRadius = Constants.DefaultHitboxRadius,
+    TargetPath? TargetPath = null,
+    double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
+    bool MinimizeTime = false)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.
@@ -94,7 +102,9 @@ public readonly record struct CircularPredictionInput(
         Point2D casterPosition,
         TargetPath path,
         CircularSkillshot skillshot,
-        double targetHitboxRadius = 65.0)
+        double targetHitboxRadius = Constants.DefaultHitboxRadius,
+        double casterHitboxRadius = Constants.DefaultCasterHitboxRadius,
+        bool minimizeTime = false)
     {
         return new CircularPredictionInput(
             casterPosition,
@@ -102,7 +112,9 @@ public readonly record struct CircularPredictionInput(
             path.GetCurrentVelocity(),
             skillshot,
             targetHitboxRadius,
-            path);
+            path,
+            casterHitboxRadius,
+            minimizeTime);
     }
 }
 

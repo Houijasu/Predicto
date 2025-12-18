@@ -443,6 +443,12 @@ bool isCircularFiring = false;  // Whether current shot is circular
 float circularAnimRadius = 0f;  // Current expanding radius during animation
 float circularTargetRadius = 0f;  // Target radius for the spell
 
+// Hitscan animation state
+bool isHitscanFiring = false;  // Whether current shot is hitscan (instant beam)
+bool hitscanBeamVisible = false;  // Whether the beam is currently visible
+float hitscanBeamTimer = 0f;  // Timer for beam visibility duration
+const float HitscanBeamDuration = 0.15f;  // How long the beam stays visible
+
 // Trail effect
 List<Vector2> skillshotTrail = new();
 
@@ -502,6 +508,9 @@ var linearPresets = new (string Name, Vector2 Vel, float Speed, float Range, flo
     ("Thresh Q", new Vector2(0, -1), 1900, 1100, 70, 0.5f),
     ("Jinx W", new Vector2(0, -1), 3300, 1450, 60, 0.6f),
     ("Ashe R", new Vector2(0, -1), 1600, 2000, 130, 0.25f),
+    // Hitscan abilities (use float.MaxValue for instant speed)
+    ("Lux R [HITSCAN]", new Vector2(0, -1), float.MaxValue, 3340, 100, 1.0f),
+    ("Xerath Q [HITSCAN]", new Vector2(0, -1), float.MaxValue, 1200, 100, 0.5f),
 };
 
 // Presets - Circular skillshots (ground-targeted, instant)
@@ -828,8 +837,11 @@ while (!Raylib.WindowShouldClose())
     {
         PredictionResult? shotResult;
 
-        // Store whether this shot is circular
+        // Store whether this shot is circular or hitscan
         isCircularFiring = isCircularMode;
+        isHitscanFiring = !isCircularMode && float.IsPositiveInfinity(skillshotSpeed);
+        hitscanBeamVisible = false;
+        hitscanBeamTimer = 0f;
 
         if (isCircularMode)
         {
@@ -1107,9 +1119,72 @@ while (!Raylib.WindowShouldClose())
                 }
             }
         }
+        else if (isHitscanFiring)
+        {
+            // Hitscan/instant beam animation
+            // After cast delay, beam appears instantly from caster through aim point
+            if (fireTime >= skillshotDelay && !skillshotLaunched)
+            {
+                skillshotLaunched = true;
+                hitscanBeamVisible = true;
+                hitscanBeamTimer = HitscanBeamDuration;
+
+                // Hitscan collision check - instant at the moment of firing
+                // Check if the beam (line from caster to aim point extended to range) hits the target
+                float collisionDist = (skillshotWidth / 2) + targetHitbox;
+
+                // Calculate closest point on beam line to target
+                var beamStart = casterPos;
+                var beamEnd = casterPos + skillshotDir * skillshotRange;
+                var targetToStart = animTargetPos - beamStart;
+                var beamVector = beamEnd - beamStart;
+                float beamLengthSq = beamVector.LengthSquared();
+                float t = Math.Clamp(Vector2.Dot(targetToStart, beamVector) / beamLengthSq, 0f, 1f);
+                var closestPoint = beamStart + beamVector * t;
+                float distToBeam = Vector2.Distance(animTargetPos, closestPoint);
+
+                if (distToBeam <= collisionDist)
+                {
+                    hitResult = "HIT!";
+                    hitResultTimer = 1f;
+                    hitCount++;
+                    targetPos = animTargetPos;
+                    collisionPos = closestPoint;
+                    collisionTime = fireTime;
+                    collisionDisplayTimer = 2f;
+                }
+                else
+                {
+                    hitResult = "MISS";
+                    hitResultTimer = 1f;
+                    missCount++;
+                    targetPos = animTargetPos;
+                }
+            }
+
+            // Update beam visibility timer
+            if (hitscanBeamVisible)
+            {
+                hitscanBeamTimer -= dt;
+                if (hitscanBeamTimer <= 0)
+                {
+                    hitscanBeamVisible = false;
+
+                    if (continuousFiring)
+                    {
+                        pathTotalTime += fireTime;
+                        StartNewShot();
+                    }
+                    else
+                    {
+                        isFiring = false;
+                    }
+                }
+            }
+        }
         else
         {
-            // Linear skillshot animation
+            // Regular linear skillshot animation (projectile)
             if (fireTime >= skillshotDelay && !skillshotLaunched)
             {
                 skillshotLaunched = true;
@@ -1337,9 +1412,49 @@ while (!Raylib.WindowShouldClose())
             // Aim point marker
             Raylib.DrawCircleV(fireAimPos, 8, new Color(100, 230, 255, 200));
         }
+        else if (isHitscanFiring)
+        {
+            // Hitscan beam animation
+            if (hitscanBeamVisible)
+            {
+                // Draw the instant beam from caster to range
+                float beamAlpha = hitscanBeamTimer / HitscanBeamDuration;
+                var beamEnd = casterPos + skillshotDir * skillshotRange;
+
+                // Draw beam glow (wider, faded)
+                float glowWidth = skillshotWidth * 1.5f;
+                DrawHitscanBeam(casterPos, beamEnd, glowWidth, new Color((byte)255, (byte)100, (byte)100, (byte)(80 * beamAlpha)));
+
+                // Draw main beam
+                DrawHitscanBeam(casterPos, beamEnd, skillshotWidth, new Color((byte)255, (byte)50, (byte)50, (byte)(200 * beamAlpha)));
+
+                // Draw beam core (bright center line)
+                float coreWidth = skillshotWidth * 0.3f;
+                DrawHitscanBeam(casterPos, beamEnd, coreWidth, new Color((byte)255, (byte)200, (byte)200, (byte)(255 * beamAlpha)));
+
+                // Draw impact point
+                Raylib.DrawCircleV(fireAimPos, 15 * beamAlpha, new Color((byte)255, (byte)100, (byte)100, (byte)(200 * beamAlpha)));
+                Raylib.DrawCircleLinesV(fireAimPos, 20 * beamAlpha, new Color((byte)255, (byte)255, (byte)255, (byte)(150 * beamAlpha)));
+            }
+            else
+            {
+                // Charging animation before beam fires
+                float delayProgress = fireTime / skillshotDelay;
+                // Pulsing charge effect at caster
+                float pulseRadius = 30 + 20 * (float)Math.Sin(fireTime * 15);
+                Raylib.DrawCircleV(casterPos, pulseRadius, new Color((byte)255, (byte)100, (byte)100, (byte)(100 * delayProgress)));
+                Raylib.DrawCircleLinesV(casterPos, 40, new Color((byte)255, (byte)50, (byte)50, (byte)(200 * delayProgress)));
+
+                // Show charging beam preview (faint)
+                var previewEnd = casterPos + skillshotDir * skillshotRange;
+                DrawHitscanBeam(casterPos, previewEnd, skillshotWidth * 0.5f, new Color((byte)255, (byte)100, (byte)100, (byte)(30 * delayProgress)));
+            }
+
+            Raylib.DrawCircleLinesV(fireAimPos, 10, new Color(255, 100, 100, 150));
+        }
         else
         {
-            // Linear skillshot animation
+            // Regular linear skillshot animation (projectile)
             // Skillshot trail
             for (int i = 0; i < skillshotTrail.Count - 1; i++)
             {
@@ -1616,6 +1731,21 @@ static void DrawArrow(Vector2 start, Vector2 end, Color color)
     var p1 = end - dir * 15 + perp * 8;
     var p2 = end - dir * 15 - perp * 8;
     Raylib.DrawTriangle(end, p1, p2, color);
+}
+
+static void DrawHitscanBeam(Vector2 start, Vector2 end, float width, Color color)
+{
+    var dir = Vector2.Normalize(end - start);
+    var perp = new Vector2(-dir.Y, dir.X);
+    var halfWidth = width / 2;
+
+    var p1 = start + perp * halfWidth;
+    var p2 = start - perp * halfWidth;
+    var p3 = end - perp * halfWidth;
+    var p4 = end + perp * halfWidth;
+
+    Raylib.DrawTriangle(p1, p2, p3, color);
+    Raylib.DrawTriangle(p1, p3, p4, color);
 }
 
 static void DrawLinearSkillshot(Vector2 center, Vector2 direction, float width, float length, Color color)

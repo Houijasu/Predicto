@@ -1,3 +1,4 @@
+using MathNet.Numerics.RootFinding;
 using MathNet.Spatial.Euclidean;
 using Predicto.Models;
 
@@ -183,23 +184,45 @@ public static class OffPathAimPointSolver
             casterPosition, predictedPos, velocity, effectiveRadius, strategy);
 
         // Refine: the aim point changes the travel distance, which may change intercept time
-        // Iterate to converge
-        for (int iteration = 0; iteration < 5; iteration++)
+        // Sug 4: Continuous Collision Detection (CCD)
+        // Iterative refinement using Brent's method to find the true intercept time
+        // for an off-path aim point. This is more robust than a fixed 5-iteration loop.
+        
+        Func<double, double> timeResidual = t =>
         {
-            double travelDistance = (aimPoint - casterPosition).Length;
-            double travelTime = travelDistance / skillshotSpeed;
-            double newInterceptTime = castDelay + travelTime;
+            var pos = path.GetPositionAtTime(t);
+            var v = path.GetVelocityAtTime(t);
+            var ap = CalculateBehindEdgeAimPoint(casterPosition, pos, v, effectiveRadius, strategy);
+            double dist = (ap - casterPosition).Length;
+            return (castDelay + dist / skillshotSpeed) - t;
+        };
 
-            // Check if intercept time changed significantly
-            if (Math.Abs(newInterceptTime - interceptTime) < 0.001)
-                break;
-
-            interceptTime = newInterceptTime;
+        // Bracket the search: [0, maxTime]
+        double maxTime = castDelay + skillshotRange / skillshotSpeed + path.GetRemainingPathTime();
+        if (Brent.TryFindRoot(timeResidual, 0, maxTime, Constants.Epsilon, 100, out double refinedTime))
+        {
+            interceptTime = refinedTime;
             predictedPos = path.GetPositionAtTime(interceptTime);
             velocity = path.GetVelocityAtTime(interceptTime);
+            aimPoint = CalculateBehindEdgeAimPoint(casterPosition, predictedPos, velocity, effectiveRadius, strategy);
+        }
+        else
+        {
+            // Fallback to fixed iteration if Brent fails to bracket (e.g. discontinuous path)
+            for (int iteration = 0; iteration < 10; iteration++)
+            {
+                double travelDistance = (aimPoint - casterPosition).Length;
+                double travelTime = travelDistance / skillshotSpeed;
+                double newInterceptTime = castDelay + travelTime;
 
-            aimPoint = CalculateBehindEdgeAimPoint(
-                casterPosition, predictedPos, velocity, effectiveRadius, strategy);
+                if (Math.Abs(newInterceptTime - interceptTime) < Constants.Epsilon)
+                    break;
+
+                interceptTime = newInterceptTime;
+                predictedPos = path.GetPositionAtTime(interceptTime);
+                velocity = path.GetVelocityAtTime(interceptTime);
+                aimPoint = CalculateBehindEdgeAimPoint(casterPosition, predictedPos, velocity, effectiveRadius, strategy);
+            }
         }
 
         // Validate range
