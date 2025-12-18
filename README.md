@@ -4,46 +4,33 @@ A high-precision ballistic prediction engine for skillshot interception in game 
 
 ## Features
 
-- **Behind-Target Strategy**: Aims BEHIND the target relative to their movement direction - target cannot see the projectile coming and must completely reverse to dodge
-- **Path-End Blending**: Smoothly transitions from trailing-edge to center aim when target approaches the end of their movement path (C1-continuous smoothstep)
-- **Sub-Pixel Precision**: Refinement system using MathNet.Numerics (RobustNewtonRaphson + Bisection) achieves ~1e-15 precision
-- **Linear & Circular Skillshots**: Full support for both projectile-based and ground-targeted abilities
-- **Multi-Target Priority Selection**: Rank and select optimal targets in team fights
-- **Reaction Time Modeling**: Confidence adjustment based on human reaction time limitations
-- **Multi-Path Prediction**: Handles complex movement patterns with multiple waypoints
-- **Adaptive Confidence**: Scoring system accounts for distance, target speed, approach angle, and prediction reliability
-- **Cast Delay Compensation**: Properly accounts for skillshot wind-up time
-- **Performance Optimized**: ~8 microseconds per prediction, zero GC pressure with stack-allocated structs
-- **30+ Built-in Presets**: Pre-configured skillshots for popular League of Legends abilities
+- **Adaptive Prediction Strategy**: Centered between **Trailing-Edge** and **Tangent** methods - provides the most reliable hit geometry by staying in the optimal center of the target's movement window.
+- **Absolute Minimal Interception Time**: Mathematical model accounting for **Rectangular Geometry** and **Caster Hitbox Offset** to find the absolute earliest possible collision.
+- **MathNet Integration**: Leverages high-precision `MathNet.Numerics` for root-finding (Brent, Newton-Raphson) and `MathNet.Spatial` for robust geometric operations.
+- **Path-End Blending**: Smoothly transitions from adaptive to center aim when target approaches the end of their movement path (C1-continuous smoothstep).
+- **Hitscan Support**: Instant beam prediction for abilities like Lux R and Xerath Q.
+- **Linear & Circular Skillshots**: Full support for both projectile-based and ground-targeted abilities.
+- **Multi-Target Priority Selection**: Rank and select optimal targets in team fights based on confidence, priority, and range.
+- **Multi-Path Prediction**: Global path root-finder handles complex movement patterns with multiple waypoints.
+- **Performance Optimized**: ~8 microseconds per prediction, zero GC pressure with stack-allocated structs.
 
 ## How It Works
 
-### The Behind-Target Strategy
+### Adaptive Prediction Strategy
 
-Unlike traditional prediction that aims at target center or leading edge, Predicto aims **behind** the target:
+Predicto defaults to the **Adaptive** strategy, which combines several targeting methods to maximize hit reliability:
 
-```
-Target moving: ↑ (north)
-Predicted position: ●
-Aim point (behind): ○ ← projectile arrives from behind
-```
+1. **Direct Behind**: Aims at the trailing edge of the target path. Forces the target to reverse direction to dodge.
+2. **Tangent Point**: Aims at the tangent of the target's hitbox from the caster's perspective. Optimized for wide projectiles.
+3. **Adaptive (Default)**: Centers the aim point between the Trailing-Edge and Tangent points, then projects it back to the hitbox boundary. This maintains the "behind-target" psychological advantage while optimizing for the largest possible collision window.
 
-Why this is optimal:
-- Target cannot see projectile approaching from their movement direction
-- Must completely REVERSE direction to dodge
-- Projectile "catches up" from behind
+### Absolute Minimal Interception
 
-### Path-End Blending
+When the `MinimizeTime` flag is set, the engine bypasses strategic heuristics to find the absolute earliest collision:
 
-When a target is following a path and approaching the final waypoint (about to stop), pure trailing-edge aim becomes suboptimal. Predicto smoothly blends from trailing-edge to center aim:
-
-```
-Path remaining > 0.5s: Pure trailing-edge (aim behind target)
-Path remaining < 0.5s: Smooth blend toward center
-Path remaining = 0:    Center aim (fastest intercept for stopped target)
-```
-
-The transition uses a C1-continuous smoothstep function for visually smooth aim adjustment.
+- **Rectangular Geometry**: Models the projectile as a flat-front rectangle rather than a circle, saving $Width/2$ in travel distance.
+- **Caster Hitbox Offset**: Projectile originates from the edge of the caster's hitbox ($R_{caster}$ offset), further reducing travel time.
+- **Global Path Root-Finding**: Uses Brent's method to find the first root of the collision function across all path segments simultaneously.
 
 ### Mathematical Model
 
@@ -61,11 +48,13 @@ Where:
 - `d` = cast delay
 - `r` = effective radius (target hitbox + skillshot width/2)
 
-### Triple Refinement Pipeline
+### Mathematical Core
 
-1. **Quadratic Formula**: O(1) analytical solution for initial estimate
-2. **RobustNewtonRaphson**: Combines Newton-Raphson with bisection fallback for robust convergence
-3. **Bisection Refinement**: Guaranteed convergence to ~1e-15 (sub-pixel precision)
+The engine leverages **MathNet.Numerics** and **MathNet.Spatial** for high-precision vector and root-finding operations:
+
+1. **Quadratic Solver**: Uses library-level polynomial root finding for stable kinematic estimates.
+2. **Brent's Method**: Employed for global path root-finding and off-path iterative refinement (Continuous Collision Detection).
+3. **Bisection**: Final stage refinement ensuring precision down to `1e-15` units.
 
 ## Project Structure
 
@@ -88,7 +77,7 @@ src/
     Program.cs                 # Raylib-based visualization
 
 tests/
-  Predicto.Tests/              # Unit tests (144 tests)
+  Predicto.Tests/              # Unit tests (178 tests)
     InterceptSolverTests.cs    # Solver unit tests
     UltimateTests.cs           # Integration tests
     EdgeCaseRegressionTests.cs # Regression tests for bug fixes
@@ -111,7 +100,10 @@ var input = new PredictionInput(
         Width: 40,
         Delay: 0.25
     ),
-    TargetHitboxRadius: 65
+    TargetHitboxRadius: 65,
+    CasterHitboxRadius: 65,
+    MinimizeTime: false,
+    Strategy: BehindEdgeStrategy.Adaptive
 );
 
 var result = prediction.Predict(input);
@@ -328,6 +320,7 @@ Key parameters in `Constants.cs`:
 | `MaxReasonableVelocity` | 2000 units/s | Maximum target speed |
 | `MaxReasonableSkillshotSpeed` | 5000 units/s | Maximum skillshot speed |
 | `TrailingEdgeMargin` | 1.0 unit | Pixel margin for behind-target aim |
+| `DefaultCasterHitboxRadius` | 65 units | Standard caster hitbox size |
 | `PathEndBlendThreshold` | 0.5s | Time threshold for path-end blending |
 | `AverageReactionTime` | 0.25s | Human average reaction time |
 | `MinReactionTime` | 0.15s | Fast human reaction time |
@@ -342,43 +335,37 @@ Main prediction engine implementing `IPrediction`.
 | Method | Description |
 |--------|-------------|
 | `Predict(PredictionInput)` | Predicts intercept for linear skillshot |
-| `PredictPureTrailingEdge(PredictionInput)` | Predicts without path-end blending (always trailing-edge) |
 | `PredictCircular(CircularPredictionInput)` | Predicts intercept for circular skillshot |
 | `RankTargets(casterPos, skillshot, targets)` | Ranks multiple targets by hit probability |
 | `RankTargetsCircular(casterPos, skillshot, targets)` | Ranks targets for circular skillshot |
 | `GetBestTarget(casterPos, skillshot, targets)` | Gets single best hittable target |
-| `GetBestTargetCircular(casterPos, skillshot, targets)` | Gets best target for circular |
 
 ### `InterceptSolver` Class
 
-Low-level mathematical solver with multiple precision levels.
+Low-level mathematical solver using MathNet.
 
 | Method | Description |
 |--------|-------------|
-| `SolveInterceptTime` | Basic center-to-center intercept |
-| `SolveEdgeInterceptTime` | Edge-to-edge collision detection |
-| `SolveBehindTarget` | Behind-target strategy (quadratic only) |
-| `RefineWithRobustNewton` | + Robust Newton-Raphson refinement |
-| `SolveInterceptTimeWithFullRefinement` | + Bisection for max precision |
-| `SolvePathBehindTargetIntercept` | Multi-waypoint path support |
+| `SolveMinimalInterceptDirect` | Absolute earliest hit (velocity) |
+| `SolvePathMinimalIntercept` | Absolute earliest hit (path-based) |
+| `SolveBehindTargetDirect` | Strategy-based intercept (velocity) |
+| `SolvePathBehindTargetIntercept` | Strategy-based intercept (path) |
+| `SolveHitscanBehindTarget` | Instant beam interception |
 | `CalculateConfidence` | Prediction reliability score |
 
 ### Model Types
 
 ```csharp
+// Configuration strategy for behind-edge aim
+enum BehindEdgeStrategy { DirectBehind, Tangent, Adaptive }
+
+// Prediction input parameters
+PredictionInput(CasterPosition, TargetPosition, TargetVelocity, Skillshot, 
+                TargetHitboxRadius, TargetPath, CasterHitboxRadius, 
+                MinimizeTime, Strategy)
+
 // Target candidate for multi-target selection
-TargetCandidate(Position, Velocity, HitboxRadius, PriorityWeight, Path?, Tag?)
-
-// Ranked result
-RankedTarget(Candidate, Result, PriorityScore)
-  .IsHittable          // bool - can target be hit
-  .HitResult           // Hit? - the hit result if hittable
-  .Tag                 // object? - user data for identification
-
-// Result types
-PredictionResult.Hit           // Success - CastPosition, PredictedTargetPosition, InterceptTime, Confidence
-PredictionResult.OutOfRange    // Target beyond skillshot range
-PredictionResult.Unreachable   // No valid intercept (target too fast, etc.)
+TargetCandidate(Position, Velocity, HitboxRadius, PriorityWeight, Path, Tag, Strategy)
 ```
 
 ## License
