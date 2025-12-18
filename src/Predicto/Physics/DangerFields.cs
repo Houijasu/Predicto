@@ -132,18 +132,17 @@ public readonly struct LinearDangerField : IDangerField
         Point2D projectilePos = GetProjectilePosition(time);
 
         // Vector from projectile to target
-        double dx = position.X - projectilePos.X;
-        double dy = position.Y - projectilePos.Y;
+        var displacement = position - projectilePos;
 
         // Project onto skillshot direction to get "along path" distance
-        double alongPath = dx * Direction.X + dy * Direction.Y;
+        double alongPath = displacement.DotProduct(Direction);
 
         // Only dangerous ahead of projectile (or slightly behind due to width)
         if (alongPath < -SigmaSq * 0.5)
             return 0;
 
         // Perpendicular distance
-        double perpDist = Math.Abs(dx * Direction.Y - dy * Direction.X);
+        double perpDist = FastMath.AbsPerpendicularDistance(position, projectilePos, Direction);
 
         // Lorentzian potential based on perpendicular distance
         double potential = Amplitude * FastMath.LorentzianFalloff(perpDist * perpDist / SigmaSq);
@@ -172,11 +171,10 @@ public readonly struct LinearDangerField : IDangerField
         Point2D projectilePos = GetProjectilePosition(time);
 
         // Vector from projectile to target
-        double dx = position.X - projectilePos.X;
-        double dy = position.Y - projectilePos.Y;
+        var displacement = position - projectilePos;
 
         // Project onto skillshot direction
-        double alongPath = dx * Direction.X + dy * Direction.Y;
+        double alongPath = displacement.DotProduct(Direction);
 
         if (alongPath < -SigmaSq * 0.5)
         {
@@ -186,9 +184,8 @@ public readonly struct LinearDangerField : IDangerField
         }
 
         // Perpendicular component (direction away from line)
-        double perpX = dx - alongPath * Direction.X;
-        double perpY = dy - alongPath * Direction.Y;
-        double perpDistSq = perpX * perpX + perpY * perpY;
+        var perp = displacement - Direction * alongPath;
+        double perpDistSq = perp.DotProduct(perp);
 
         // Gradient of Lorentzian: d/dr [A/(1 + r²/σ²)] = -2A*r / (σ² * (1 + r²/σ²)²)
         double normalizedDistSq = perpDistSq / SigmaSq;
@@ -203,8 +200,8 @@ public readonly struct LinearDangerField : IDangerField
             alongFactor = FastMath.LorentzianFalloff(alongPath, Range * 0.5);
         }
 
-        gradX = factor * perpX * alongFactor;
-        gradY = factor * perpY * alongFactor;
+        gradX = factor * perp.X * alongFactor;
+        gradY = factor * perp.Y * alongFactor;
     }
 
     /// <inheritdoc/>
@@ -296,9 +293,8 @@ public readonly struct CircularDangerField : IDangerField
         if (timeMult < Constants.Epsilon)
             return 0;
 
-        double dx = position.X - Center.X;
-        double dy = position.Y - Center.Y;
-        double distSq = dx * dx + dy * dy;
+        var displacement = position - Center;
+        double distSq = displacement.DotProduct(displacement);
 
         // Lorentzian potential centered on ability
         double potential = Amplitude * FastMath.LorentzianFalloff(distSq / SigmaSq);
@@ -318,10 +314,8 @@ public readonly struct CircularDangerField : IDangerField
             return;
         }
 
-        double dx = position.X - Center.X;
-        double dy = position.Y - Center.Y;
-
-        FastMath.LorentzianGradient(dx, dy, Amplitude * timeMult, SigmaSq, out gradX, out gradY);
+        var displacement = position - Center;
+        FastMath.LorentzianGradient(displacement.X, displacement.Y, Amplitude * timeMult, SigmaSq, out gradX, out gradY);
     }
 
     /// <inheritdoc/>

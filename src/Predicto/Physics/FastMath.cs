@@ -39,9 +39,8 @@ public static class FastMath
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static double DistanceSquared(Point2D a, Point2D b)
     {
-        double dx = b.X - a.X;
-        double dy = b.Y - a.Y;
-        return dx * dx + dy * dy;
+        var displacement = a - b;
+        return displacement.DotProduct(displacement);
     }
 
     /// <summary>
@@ -95,23 +94,9 @@ public static class FastMath
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static double DistanceToSegment(Point2D point, Point2D a, Point2D b)
     {
-        double dx = b.X - a.X;
-        double dy = b.Y - a.Y;
-        double lenSq = dx * dx + dy * dy;
-
-        if (lenSq < Constants.Epsilon * Constants.Epsilon)
-            return (point - a).Length;
-
-        // Project point onto line AB, clamped to [0, 1]
-        double t = ((point.X - a.X) * dx + (point.Y - a.Y) * dy) / lenSq;
-        t = Math.Clamp(t, 0.0, 1.0);
-
-        double closestX = a.X + t * dx;
-        double closestY = a.Y + t * dy;
-
-        double dX = point.X - closestX;
-        double dY = point.Y - closestY;
-        return Math.Sqrt(dX * dX + dY * dY);
+        var segment = new LineSegment2D(a, b);
+        var closest = segment.ClosestPointTo(point);
+        return (point - closest).Length;
     }
 
     /// <summary>

@@ -389,7 +389,8 @@ public sealed class InterceptSolver
         double targetHitboxRadius,
         double beamWidth,
         double beamRange,
-        double behindMargin = 1.0)
+        double behindMargin = 1.0,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         // Input validation
         if (castDelay < 0)
@@ -420,18 +421,9 @@ public sealed class InterceptSolver
             return (predictedPos, predictedPos, castDelay);
         }
 
-        // Calculate behind offset
-        double behindDistance = effectiveRadius - behindMargin;
-        if (behindDistance < Constants.Epsilon)
-        {
-            behindDistance = effectiveRadius * 0.5;
-        }
-
-        Vector2D moveDirection = targetVelocity.Normalize();
-        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
-
-        // Aim point is behind the predicted position
-        Point2D aimPoint = predictedPos + behindOffset;
+        // Calculate aim point based on strategy at the firing time
+        Point2D aimPoint = CalculateBehindInitialPoint(
+            casterPosition, predictedPos, targetVelocity, effectiveRadius, behindMargin, strategy);
 
         // Verify aim point is within range
         double aimDistance = (aimPoint - casterPosition).Length;
@@ -609,6 +601,82 @@ public sealed class InterceptSolver
         double projectileDistance = skillshotSpeed * flightTime + (effectiveRadius - margin);
 
         return distanceToTarget - projectileDistance;
+    }
+
+    /// <summary>
+    /// Calculates the initial aim point for behind-edge strategies.
+    /// Incorporates DirectBehind, Tangent, and Adaptive methods.
+    /// </summary>
+    private static Point2D CalculateBehindInitialPoint(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        double effectiveRadius,
+        double behindMargin,
+        BehindEdgeStrategy strategy)
+    {
+        double hitRadius = effectiveRadius - behindMargin;
+        if (hitRadius < Constants.Epsilon) hitRadius = effectiveRadius * 0.5;
+
+        // Target movement direction
+        Vector2D moveDir = targetVelocity.Length > Constants.MinVelocity
+            ? targetVelocity.Normalize()
+            : (targetPosition - casterPosition).Normalize(); // Default if stationary
+
+        Vector2D behindDir = moveDir.Negate();
+
+        if (strategy == BehindEdgeStrategy.DirectBehind)
+        {
+            return targetPosition + behindDir * hitRadius;
+        }
+
+        // Tangent Point Calculation
+        Vector2D toTarget = targetPosition - casterPosition;
+        double dist = toTarget.Length;
+
+        // If caster is inside the target, fall back to direct behind
+        if (dist <= hitRadius)
+            return targetPosition + behindDir * hitRadius;
+
+        Vector2D toTargetNorm = toTarget / dist;
+        Vector2D perpLeft = new Vector2D(-toTargetNorm.Y, toTargetNorm.X);
+        Vector2D perpRight = perpLeft.Negate();
+
+        // Choose perpendicular pointing more "behind"
+        Vector2D perp = perpLeft.DotProduct(behindDir) > perpRight.DotProduct(behindDir)
+            ? perpLeft
+            : perpRight;
+
+        Point2D tangentPoint = targetPosition + perp * hitRadius;
+
+        // For Tangent strategy, we may need to blend if the tangent point is not actually behind
+        if (strategy == BehindEdgeStrategy.Tangent)
+        {
+            Vector2D offset = tangentPoint - targetPosition;
+            double behindness = offset.DotProduct(behindDir);
+            if (behindness > 0) return tangentPoint;
+
+            // Blend based on how \"behind\" the tangent point is
+            double blendFactor = Math.Max(0, behindness / hitRadius + 0.5);
+            return new Point2D(
+                targetPosition.X + (behindDir.X * hitRadius * (1 - blendFactor) + offset.X * blendFactor),
+                targetPosition.Y + (behindDir.Y * hitRadius * (1 - blendFactor) + offset.Y * blendFactor));
+        }
+
+        // Adaptive: center of trailing edge (DirectBehind) and tangent methods
+        Point2D directBehindPoint = targetPosition + behindDir * hitRadius;
+        
+        // Midpoint of the chord between Tangent and DirectBehind
+        Point2D centerPoint = new Point2D(
+            (directBehindPoint.X + tangentPoint.X) * 0.5,
+            (directBehindPoint.Y + tangentPoint.Y) * 0.5);
+
+        // Project back to hit radius to maintain optimal collision geometry
+        Vector2D centerOffset = centerPoint - targetPosition;
+        double centerLen = centerOffset.Length;
+        if (centerLen < Constants.Epsilon) return directBehindPoint;
+
+        return targetPosition + centerOffset * (hitRadius / centerLen);
     }
 
     /// <summary>
@@ -2001,7 +2069,8 @@ public sealed class InterceptSolver
         double skillshotRange,
         double behindMargin = 1.0,
         double secantTolerance = 1e-12,
-        double bisectionTolerance = 1e-15)
+        double bisectionTolerance = 1e-15,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         // Input validation
         ValidateInputs(skillshotSpeed, castDelay, skillshotRange);
@@ -2011,7 +2080,7 @@ public sealed class InterceptSolver
 
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
 
-        // For stationary targets, there's no "behind" direction - aim at center
+        // For stationary targets, aim at center
         if (targetVelocity.Length < Constants.MinVelocity)
         {
             double? stationaryTime = SolveEdgeInterceptTime(
@@ -2024,19 +2093,9 @@ public sealed class InterceptSolver
             return (targetPosition, targetPosition, stationaryTime.Value);
         }
 
-        // Calculate behind offset: (effectiveRadius - margin) in direction opposite to velocity
-        // Defensive check ensures we always have a meaningful behind distance
-        double behindDistance = effectiveRadius - behindMargin;
-        if (behindDistance < Constants.Epsilon)
-        {
-            behindDistance = effectiveRadius * 0.5;
-        }
-
-        Vector2D moveDirection = targetVelocity.Normalize();
-        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
-
-        // Create virtual target position: offset BEHIND the real target
-        Point2D virtualTargetPosition = targetPosition + behindOffset;
+        // Calculate strategy-specific initial point
+        Point2D virtualTargetPosition = CalculateBehindInitialPoint(
+            casterPosition, targetPosition, targetVelocity, effectiveRadius, behindMargin, strategy);
 
         // Solve intercept with FULL triple refinement for pixel-perfect precision
         double? interceptTime = SolveInterceptTimeWithFullRefinement(
@@ -2098,7 +2157,8 @@ public sealed class InterceptSolver
         double targetHitboxRadius,
         double skillshotWidth,
         double skillshotRange,
-        double behindMargin = 1.0)
+        double behindMargin = 1.0,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         // Input validation
         ValidateInputs(skillshotSpeed, castDelay, skillshotRange);
@@ -2108,7 +2168,7 @@ public sealed class InterceptSolver
 
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
 
-        // For stationary targets, there's no "behind" direction - aim at center
+        // For stationary targets, aim at center
         if (targetVelocity.Length < Constants.MinVelocity)
         {
             double? stationaryTime = SolveEdgeInterceptTime(
@@ -2121,18 +2181,9 @@ public sealed class InterceptSolver
             return (targetPosition, targetPosition, stationaryTime.Value);
         }
 
-        // Calculate behind distance and initial behind-point position
-        double behindDistance = effectiveRadius - behindMargin;
-        if (behindDistance < Constants.Epsilon)
-        {
-            behindDistance = effectiveRadius * 0.5;
-        }
-
-        Vector2D velocityUnit = targetVelocity.Normalize();
-
-        // Behind-point initial position: target position offset backwards along velocity
-        // B₀ = T - r*V̂
-        Point2D behindPointInitial = targetPosition + velocityUnit.Negate() * behindDistance;
+        // Calculate initial point based on strategy
+        Point2D behindPointInitial = CalculateBehindInitialPoint(
+            casterPosition, targetPosition, targetVelocity, effectiveRadius, behindMargin, strategy);
 
         // Displacement from caster to initial behind-point
         var displacement = behindPointInitial - casterPosition;
@@ -2629,20 +2680,18 @@ public sealed class InterceptSolver
         }
         else
         {
-            double disc = b * b - 4 * a * c;
-            if (disc >= 0)
-            {
-                double sqrtDisc = Math.Sqrt(disc);
-                double t1 = (-b - sqrtDisc) / (2 * a);
-                double t2 = (-b + sqrtDisc) / (2 * a);
+            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-                bool v1 = t1 >= castDelay - Constants.Epsilon;
-                bool v2 = t2 >= castDelay - Constants.Epsilon;
+            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
+            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
 
-                if (v1 && v2) bestT = Math.Min(t1, t2);
-                else if (v1) bestT = t1;
-                else if (v2) bestT = t2;
-            }
+            bool v1 = t1.HasValue && t1 >= castDelay - Constants.Epsilon;
+            bool v2 = t2.HasValue && t2 >= castDelay - Constants.Epsilon;
+
+            if (v1 && v2) bestT = Math.Min(t1!.Value, t2!.Value);
+            else if (v1) bestT = t1;
+            else if (v2) bestT = t2;
         }
 
         if (!bestT.HasValue) return null;
@@ -2744,7 +2793,8 @@ public sealed class InterceptSolver
         double targetHitboxRadius,
         double skillshotWidth,
         double skillshotRange,
-        double behindMargin = 1.0)
+        double behindMargin = 1.0,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         ValidateInputs(skillshotSpeed, castDelay);
         ValidateGeometry(targetHitboxRadius, skillshotWidth, skillshotRange);
@@ -2752,13 +2802,6 @@ public sealed class InterceptSolver
             throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
 
         double effectiveRadius = targetHitboxRadius + skillshotWidth / 2;
-
-        // Clamp margin: ensure it's positive and leaves room for valid collision
-        double maxMargin = effectiveRadius > 1.0
-            ? effectiveRadius - 1.0
-            : effectiveRadius * 0.9;
-        behindMargin = Math.Clamp(behindMargin, Constants.Epsilon, Math.Max(Constants.Epsilon, maxMargin));
-        double behindDistance = effectiveRadius - behindMargin;
 
         if (path.Speed < Constants.MinVelocity)
         {
@@ -2781,12 +2824,9 @@ public sealed class InterceptSolver
             double segmentEndTime = segmentStartTime + segmentDuration;
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Calculate behind offset for this segment
-            Vector2D moveDirection = segmentVelocity.Normalize();
-            Vector2D behindOffset = moveDirection.Negate() * behindDistance;
-
-            // Virtual target position: offset behind the segment start
-            Point2D virtualStart = segment.Start + behindOffset;
+            // Calculate strategy-specific initial point for this segment
+            Point2D virtualStart = CalculateBehindInitialPoint(
+                casterPosition, segment.Start, segmentVelocity, effectiveRadius, behindMargin, strategy);
 
             var interceptResult = SolveSegmentInterceptWithRefinement(
                 casterPosition,
@@ -2802,17 +2842,12 @@ public sealed class InterceptSolver
             {
                 double interceptTime = interceptResult.Value;
 
-                // FIX: Calculate aim point using velocity at intercept time
-                // This ensures the aim point lies on the target's actual path, not the virtual path
+                // Calculate aim point using strategy at the actual intercept time
                 Point2D predictedPos = path.GetPositionAtTime(interceptTime);
                 Vector2D velocityAtIntercept = path.GetVelocityAtTime(interceptTime);
                 
-                Vector2D moveDirectionAtIntercept = velocityAtIntercept.Length > Constants.Epsilon 
-                    ? velocityAtIntercept.Normalize() 
-                    : moveDirection; // Fallback to segment direction if velocity is zero
-                
-                // The aim point is behind the target relative to their movement direction
-                Point2D aimPoint = predictedPos + moveDirectionAtIntercept.Negate() * behindDistance;
+                Point2D aimPoint = CalculateBehindInitialPoint(
+                    casterPosition, predictedPos, velocityAtIntercept, effectiveRadius, behindMargin, strategy);
 
                 return new PathInterceptResult(aimPoint, predictedPos, interceptTime, segment.WaypointIndex);
             }
@@ -3050,24 +3085,21 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Quadratic case
-            double discriminant = b * b - 4 * a * c;
-            if (discriminant >= 0)
-            {
-                double sqrtDisc = Math.Sqrt(discriminant);
-                double t1 = (-b - sqrtDisc) / (2 * a);
-                double t2 = (-b + sqrtDisc) / (2 * a);
+            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            var (root1, root2) = FindRoots.Quadratic(c, b, a);
+            
+            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
+            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
 
-                bool v1 = t1 > minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
-                bool v2 = t2 > minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
+            bool v1 = t1.HasValue && t1 > minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
+            bool v2 = t2.HasValue && t2 > minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
 
-                if (v1 && v2)
-                    localTime = Math.Min(t1, t2);
-                else if (v1)
-                    localTime = t1;
-                else if (v2)
-                    localTime = t2;
-            }
+            if (v1 && v2)
+                localTime = Math.Min(t1!.Value, t2!.Value);
+            else if (v1)
+                localTime = t1;
+            else if (v2)
+                localTime = t2;
         }
 
         if (!localTime.HasValue)
@@ -3177,28 +3209,25 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Quadratic formula
-            double discriminant = b * b - 4 * a * c;
-            if (discriminant >= 0)
-            {
-                double sqrtDisc = Math.Sqrt(discriminant);
-                double t1 = (-b - sqrtDisc) / (2 * a);
-                double t2 = (-b + sqrtDisc) / (2 * a);
+            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-                // Valid times: T > adjustedDelay (projectile launched) and T in [0, segmentDuration]
-                double minLocalTime = Math.Max(0, adjustedDelay);
-                double maxLocalTime = maxTime - minTime;
+            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
+            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
 
-                bool v1 = t1 > minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
-                bool v2 = t2 > minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
+            // Valid times: T > adjustedDelay (projectile launched) and T in [0, segmentDuration]
+            double minLocalTime = Math.Max(0, adjustedDelay);
+            double maxLocalTime = maxTime - minTime;
 
-                if (v1 && v2)
-                    localTime = Math.Min(t1, t2);
-                else if (v1)
-                    localTime = t1;
-                else if (v2)
-                    localTime = t2;
-            }
+            bool v1 = t1.HasValue && t1 > minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
+            bool v2 = t2.HasValue && t2 > minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
+
+            if (v1 && v2)
+                localTime = Math.Min(t1!.Value, t2!.Value);
+            else if (v1)
+                localTime = t1;
+            else if (v2)
+                localTime = t2;
         }
 
         if (!localTime.HasValue)
@@ -3299,24 +3328,21 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Quadratic formula
-            double discriminant = b * b - 4 * a * c;
-            if (discriminant >= 0)
-            {
-                double sqrtDisc = Math.Sqrt(discriminant);
-                double t1 = (-b - sqrtDisc) / (2 * a);
-                double t2 = (-b + sqrtDisc) / (2 * a);
+            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-                bool v1 = t1 >= minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
-                bool v2 = t2 >= minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
+            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
+            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
 
-                if (v1 && v2)
-                    localTime = Math.Min(t1, t2);
-                else if (v1)
-                    localTime = t1;
-                else if (v2)
-                    localTime = t2;
-            }
+            bool v1 = t1.HasValue && t1 >= minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
+            bool v2 = t2.HasValue && t2 >= minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
+
+            if (v1 && v2)
+                localTime = Math.Min(t1!.Value, t2!.Value);
+            else if (v1)
+                localTime = t1;
+            else if (v2)
+                localTime = t2;
         }
 
         if (!localTime.HasValue)
@@ -3525,7 +3551,8 @@ public sealed class InterceptSolver
         double castDelay,
         double targetHitboxRadius,
         double spellRange,
-        double behindMargin = 1.0)
+        double behindMargin = 1.0,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         // Input validation
         if (spellRadius < 0)
@@ -3540,12 +3567,6 @@ public sealed class InterceptSolver
             throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
 
         double effectiveRadius = spellRadius + targetHitboxRadius;
-
-        // Clamp margin: ensure it's positive and leaves room for valid collision
-        double maxMargin = effectiveRadius > 1.0
-            ? effectiveRadius - 1.0
-            : effectiveRadius * 0.9;
-        behindMargin = Math.Clamp(behindMargin, Constants.Epsilon, Math.Max(Constants.Epsilon, maxMargin));
 
         // Predict target position at detonation time
         Point2D predictedPosition = targetPosition + targetVelocity * castDelay;
@@ -3564,20 +3585,9 @@ public sealed class InterceptSolver
                 DistanceFromCenter: 0);
         }
 
-        // Calculate behind offset
-        // We want to hit (effectiveRadius - behindMargin) behind the target
-        double behindDistance = effectiveRadius - behindMargin;
-        if (behindDistance < Constants.Epsilon)
-        {
-            behindDistance = effectiveRadius * 0.5;
-        }
-
-        // Direction opposite to target movement
-        Vector2D moveDirection = targetVelocity.Normalize();
-        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
-
-        // Cast position is BEHIND the predicted position
-        Point2D castPosition = predictedPosition + behindOffset;
+        // Calculate aim point based on strategy
+        Point2D castPosition = CalculateBehindInitialPoint(
+            casterPosition, predictedPosition, targetVelocity, effectiveRadius, behindMargin, strategy);
 
         // Check if cast position is within range
         double distanceToCast = (castPosition - casterPosition).Length;
@@ -3596,12 +3606,12 @@ public sealed class InterceptSolver
         }
 
         // Distance from spell center to target at detonation
-        // This equals behindDistance (target is this far from spell center)
+        double finalOffset = (castPosition - predictedPosition).Length;
         return new CircularInterceptResult(
             CastPosition: castPosition,
             PredictedTargetPosition: predictedPosition,
             DetonationTime: castDelay,
-            DistanceFromCenter: behindDistance);
+            DistanceFromCenter: finalOffset);
     }
 
     /// <summary>
@@ -3647,7 +3657,8 @@ public sealed class InterceptSolver
         double castDelay,
         double targetHitboxRadius,
         double spellRange,
-        double behindMargin = 1.0)
+        double behindMargin = 1.0,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         if (castDelay < 0)
             throw new ArgumentException("Cast delay cannot be negative", nameof(castDelay));
@@ -3655,12 +3666,6 @@ public sealed class InterceptSolver
             throw new ArgumentException("Behind margin cannot be negative", nameof(behindMargin));
 
         double effectiveRadius = spellRadius + targetHitboxRadius;
-
-        // Clamp margin: ensure it's positive and leaves room for valid collision
-        double maxMargin = effectiveRadius > 1.0
-            ? effectiveRadius - 1.0
-            : effectiveRadius * 0.9;
-        behindMargin = Math.Clamp(behindMargin, Constants.Epsilon, Math.Max(Constants.Epsilon, maxMargin));
 
         // Get position at detonation time
         Point2D predictedPosition = path.GetPositionAtTime(castDelay);
@@ -3682,16 +3687,9 @@ public sealed class InterceptSolver
                 DistanceFromCenter: 0);
         }
 
-        // Calculate behind offset based on velocity at detonation
-        double behindDistance = effectiveRadius - behindMargin;
-        if (behindDistance < Constants.Epsilon)
-        {
-            behindDistance = effectiveRadius * 0.5;
-        }
-
-        Vector2D moveDirection = velocityAtDetonation.Normalize();
-        Vector2D behindOffset = moveDirection.Negate() * behindDistance;
-        Point2D castPosition = predictedPosition + behindOffset;
+        // Calculate aim point based on strategy
+        Point2D castPosition = CalculateBehindInitialPoint(
+            casterPosition, predictedPosition, velocityAtDetonation, effectiveRadius, behindMargin, strategy);
 
         // Check range
         double distanceToCast = (castPosition - casterPosition).Length;
@@ -3709,11 +3707,12 @@ public sealed class InterceptSolver
                 DistanceFromCenter: 0);
         }
 
+        double finalOffset = (castPosition - predictedPosition).Length;
         return new CircularInterceptResult(
             CastPosition: castPosition,
             PredictedTargetPosition: predictedPosition,
             DetonationTime: castDelay,
-            DistanceFromCenter: behindDistance);
+            DistanceFromCenter: finalOffset);
     }
 
     /// <summary>

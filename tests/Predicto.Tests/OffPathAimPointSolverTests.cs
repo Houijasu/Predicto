@@ -1,4 +1,5 @@
 using MathNet.Spatial.Euclidean;
+using Predicto.Models;
 using Predicto.Solvers;
 
 namespace Predicto.Tests;

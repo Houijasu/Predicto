@@ -199,7 +199,8 @@ public sealed class Ultimate : IPrediction
             input.TargetHitboxRadius,
             input.Skillshot.Width,
             input.Skillshot.Range,
-            behindMargin: blendedMargin);
+            behindMargin: blendedMargin,
+            strategy: input.Strategy);
 
         if (!result.HasValue)
         {
@@ -314,7 +315,8 @@ public sealed class Ultimate : IPrediction
             input.TargetHitboxRadius,
             input.Skillshot.Width,
             input.Skillshot.Range,
-            behindMargin: adaptiveMargin);  // Use full margin, no blending
+            behindMargin: adaptiveMargin,
+            strategy: input.Strategy);  // Use full margin, no blending
 
         if (!result.HasValue)
         {
@@ -468,7 +470,8 @@ public sealed class Ultimate : IPrediction
                 input.TargetHitboxRadius,
                 input.Skillshot.Width,
                 input.Skillshot.Range,
-                behindMargin: adaptiveMargin);
+                behindMargin: adaptiveMargin,
+                strategy: input.Strategy);
         }
 
         if (!result.HasValue)
@@ -949,7 +952,8 @@ public sealed class Ultimate : IPrediction
             input.Skillshot.Delay,
             input.TargetHitboxRadius,
             input.Skillshot.Range,
-            behindMargin: CalculateCircularAdaptiveMargin(effectiveRadius));
+            behindMargin: CalculateCircularAdaptiveMargin(effectiveRadius),
+            strategy: input.Strategy);
 
         if (!result.HasValue)
         {
@@ -1016,7 +1020,8 @@ public sealed class Ultimate : IPrediction
             input.Skillshot.Delay,
             input.TargetHitboxRadius,
             input.Skillshot.Range,
-            behindMargin: adaptiveMargin);
+            behindMargin: adaptiveMargin,
+            strategy: input.Strategy);
 
         if (!result.HasValue)
         {
@@ -1151,7 +1156,8 @@ public sealed class Ultimate : IPrediction
                 target.Velocity,
                 skillshot,
                 target.HitboxRadius,
-                target.Path);
+                target.Path,
+                Strategy: target.Strategy);
 
             var result = Predict(input);
             double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
@@ -1190,7 +1196,8 @@ public sealed class Ultimate : IPrediction
                 target.Velocity,
                 skillshot,
                 target.HitboxRadius,
-                target.Path);
+                target.Path,
+                Strategy: target.Strategy);
 
             var result = PredictCircular(input);
             double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);

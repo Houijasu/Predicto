@@ -373,24 +373,4 @@ public static class OffPathAimPointSolver
     }
 }
 
-public enum BehindEdgeStrategy
-{
-    /// <summary>
-    /// Aim directly behind target on path line extended.
-    /// Simple, works well when caster is roughly aligned with target path.
-    /// </summary>
-    DirectBehind,
 
-    /// <summary>
-    /// Calculate tangent point from caster to target's hitbox circle.
-    /// Geometrically optimal for edge clipping.
-    /// </summary>
-    Tangent,
-
-    /// <summary>
-    /// Adaptive strategy: uses Tangent when target moves toward caster (faster intercept),
-    /// and DirectBehind when target moves away. Smoothly blends between them to avoid
-    /// sudden jumps in aim position.
-    /// </summary>
-    Adaptive
-}

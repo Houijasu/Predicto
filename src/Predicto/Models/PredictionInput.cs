@@ -12,6 +12,28 @@ namespace Predicto.Models;
 /// <param name="Skillshot">Skillshot parameters</param>
 /// <param name="TargetHitboxRadius">Target's hitbox radius for collision detection</param>
 /// <param name="TargetPath">Optional multi-waypoint path for the target (takes precedence over TargetVelocity)</param>
+public enum BehindEdgeStrategy
+{
+    /// <summary>
+    /// Aim directly behind the target's center relative to its movement.
+    /// Simple and robust, but doesn't account for caster position.
+    /// </summary>
+    DirectBehind,
+
+    /// <summary>
+    /// Aim at the tangent point of the target's hitbox from the caster's perspective
+    /// that is also in the "behind" hemisphere.
+    /// Better for wide skillshots and large hitboxes.
+    /// </summary>
+    Tangent,
+
+    /// <summary>
+    /// A blend between DirectBehind and Tangent.
+    /// Provides the most reliable hit by centering the aim point in the optimal collision zone.
+    /// </summary>
+    Adaptive
+}
+
 public readonly record struct PredictionInput(
     Point2D CasterPosition,
     Point2D TargetPosition,
@@ -20,7 +42,8 @@ public readonly record struct PredictionInput(
     double TargetHitboxRadius = Constants.DefaultHitboxRadius,
     TargetPath? TargetPath = null,
     double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
-    bool MinimizeTime = false)
+    bool MinimizeTime = false,
+    BehindEdgeStrategy Strategy = BehindEdgeStrategy.Adaptive)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.
@@ -78,7 +101,8 @@ public readonly record struct CircularPredictionInput(
     double TargetHitboxRadius = Constants.DefaultHitboxRadius,
     TargetPath? TargetPath = null,
     double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
-    bool MinimizeTime = false)
+    bool MinimizeTime = false,
+    BehindEdgeStrategy Strategy = BehindEdgeStrategy.Adaptive)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.
@@ -134,7 +158,8 @@ public readonly record struct TargetCandidate(
     double HitboxRadius = 65.0,
     double PriorityWeight = 1.0,
     TargetPath? Path = null,
-    object? Tag = null)
+    object? Tag = null,
+    BehindEdgeStrategy Strategy = BehindEdgeStrategy.Adaptive)
 {
     /// <summary>
     /// Creates a target candidate with a movement path.
@@ -143,7 +168,8 @@ public readonly record struct TargetCandidate(
         TargetPath path,
         double hitboxRadius = 65.0,
         double priorityWeight = 1.0,
-        object? tag = null)
+        object? tag = null,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         return new TargetCandidate(
             path.CurrentPosition,
@@ -151,7 +177,8 @@ public readonly record struct TargetCandidate(
             hitboxRadius,
             priorityWeight,
             path,
-            tag);
+            tag,
+            strategy);
     }
 
     /// <summary>
@@ -161,7 +188,8 @@ public readonly record struct TargetCandidate(
         Point2D position,
         double hitboxRadius = 65.0,
         double priorityWeight = 1.0,
-        object? tag = null)
+        object? tag = null,
+        BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
     {
         return new TargetCandidate(
             position,
@@ -169,7 +197,8 @@ public readonly record struct TargetCandidate(
             hitboxRadius,
             priorityWeight,
             null,
-            tag);
+            tag,
+            strategy);
     }
 }
 
