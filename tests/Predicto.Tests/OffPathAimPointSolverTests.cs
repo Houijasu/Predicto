@@ -126,11 +126,11 @@ public class OffPathAimPointSolverTests
         // Adaptive should be roughly equidistant from both Tangent and DirectBehind
         double distToTangent = (adaptiveResult - tangentResult).Length;
         double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
-        
+
         // Allow some tolerance due to projection onto circle
         Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
             $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1})");
-        
+
         // Adaptive should still be on the effective radius circle
         double distFromPredicted = (adaptiveResult - predicted).Length;
         Assert.Equal(radius, distFromPredicted, precision: 1);
@@ -179,11 +179,11 @@ public class OffPathAimPointSolverTests
         // Adaptive should be roughly equidistant from both Tangent and DirectBehind
         double distToTangent = (adaptiveResult - tangentResult).Length;
         double distToDirectBehind = (adaptiveResult - directBehindResult).Length;
-        
+
         // Allow some tolerance due to projection onto circle
         Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
             $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1})");
-        
+
         // Adaptive should still be on the effective radius circle
         double distFromPredicted = (adaptiveResult - predicted).Length;
         Assert.Equal(radius, distFromPredicted, precision: 1);
@@ -468,7 +468,7 @@ public class OffPathAimPointSolverTests
             // Adaptive should be roughly equidistant from both (it's the center, projected onto circle)
             Assert.True(Math.Abs(distToTangent - distToDirectBehind) < radius * 0.5,
                 $"Adaptive should be roughly equidistant from Tangent ({distToTangent:F1}) and DirectBehind ({distToDirectBehind:F1}) for velocity {velocity}");
-            
+
             // Should be on the circle
             double distFromPredicted = (adaptiveResult - predicted).Length;
             Assert.Equal(radius, distFromPredicted, precision: 1);

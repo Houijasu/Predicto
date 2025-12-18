@@ -759,18 +759,18 @@ while (!Raylib.WindowShouldClose())
         tangentInterceptTime = 0;
         adaptiveInterceptTime = 0;
         trailingEdgeInterceptTime = 0;
-        
+
         if (ultimateResult is PredictionResult.Hit hit)
         {
             double effectiveRadius = targetHitbox + skillshotWidth / 2;
-            
+
             // Store default intercept time
             defaultInterceptTime = hit.InterceptTime;
-            
+
             // Get predicted position and velocity
             var predictedPos = hit.PredictedTargetPosition;
             Vector2D velocity;
-            
+
             if (input.HasPath && input.TargetPath != null)
             {
                 velocity = input.TargetPath.GetVelocityAtTime(hit.InterceptTime);
@@ -779,17 +779,17 @@ while (!Raylib.WindowShouldClose())
             {
                 velocity = input.TargetVelocity;
             }
-            
+
             // Calculate Tangent aim point
             tangentAimPoint = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
                 input.CasterPosition, predictedPos, velocity, effectiveRadius,
                 BehindEdgeStrategy.Tangent);
-            
+
             // Calculate Adaptive aim point (blends Tangent and DirectBehind based on movement direction)
             adaptiveAimPoint = OffPathAimPointSolver.CalculateBehindEdgeAimPoint(
                 input.CasterPosition, predictedPos, velocity, effectiveRadius,
                 BehindEdgeStrategy.Adaptive);
-            
+
             // Calculate TRUE intercept times (when skillshot edge touches target hitbox)
             if (tangentAimPoint.HasValue)
             {
@@ -798,7 +798,7 @@ while (!Raylib.WindowShouldClose())
                     skillshotSpeed, skillshotDelay, targetHitbox, skillshotWidth);
                 tangentInterceptTime = trueTime ?? 0;
             }
-            
+
             if (adaptiveAimPoint.HasValue)
             {
                 var trueTime = OffPathAimPointSolver.CalculateTrueInterceptTime(
@@ -807,7 +807,7 @@ while (!Raylib.WindowShouldClose())
                 adaptiveInterceptTime = trueTime ?? 0;
             }
         }
-        
+
         // Trailing edge intercept time
         if (trailingEdgeResult is PredictionResult.Hit trailingHit)
         {
@@ -1298,40 +1298,40 @@ while (!Raylib.WindowShouldClose())
             {
                 var tangentAim = new Vector2((float)tangentAimPoint.Value.X, (float)tangentAimPoint.Value.Y);
                 bool isTangentActive = currentAimStrategy == 1;
-                
+
                 // Draw larger if active
                 float radius = isTangentActive ? 10 : 6;
                 byte alpha = isTangentActive ? (byte)255 : (byte)150;
                 byte alphaFill = (byte)(alpha * 0.8);
                 byte alphaLine = (byte)(alpha * 0.6);
-                
+
                 Raylib.DrawCircleV(tangentAim, radius, new Color((byte)255, (byte)100, (byte)255, alphaFill));
                 Raylib.DrawCircleLinesV(tangentAim, radius + 2, new Color((byte)255, (byte)100, (byte)255, alpha));
                 Raylib.DrawLineEx(targetPos, tangentAim, isTangentActive ? 2.5f : 1.5f, new Color((byte)255, (byte)100, (byte)255, alphaLine));
-                
+
                 // Draw skillshot preview if active
                 if (isTangentActive)
                 {
                     DrawSkillshotPreview(casterPos, tangentAim, skillshotWidth, new Color(255, 100, 255, 30));
                 }
             }
-            
+
             // Adaptive strategy - Cyan (blends Tangent and DirectBehind based on movement direction)
             if (adaptiveAimPoint.HasValue)
             {
                 var adaptiveAim = new Vector2((float)adaptiveAimPoint.Value.X, (float)adaptiveAimPoint.Value.Y);
                 bool isAdaptiveActive = currentAimStrategy == 2;
-                
+
                 // Draw larger if active
                 float radius = isAdaptiveActive ? 10 : 6;
                 byte alpha = isAdaptiveActive ? (byte)255 : (byte)150;
                 byte alphaFill = (byte)(alpha * 0.8);
                 byte alphaLine = (byte)(alpha * 0.6);
-                
+
                 Raylib.DrawCircleV(adaptiveAim, radius, new Color((byte)0, (byte)220, (byte)220, alphaFill));
                 Raylib.DrawCircleLinesV(adaptiveAim, radius + 2, new Color((byte)0, (byte)255, (byte)255, alpha));
                 Raylib.DrawLineEx(targetPos, adaptiveAim, isAdaptiveActive ? 2.5f : 1.5f, new Color((byte)0, (byte)220, (byte)220, alphaLine));
-                
+
                 // Draw skillshot preview if active
                 if (isAdaptiveActive)
                 {
@@ -1914,7 +1914,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
     ctrlY += lineHeight;
     Raylib.DrawTextEx(font, "TAB : Cycle presets  |  ` : Toggle mode", new Vector2(20, ctrlY), smallFont, spacing, Color.LightGray);
     ctrlY += lineHeight;
-    
+
     // Aim strategy display
     var strategyColor = currentAimStrategy switch
     {
@@ -1944,17 +1944,17 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         // Magenta - Tangent
         Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(255, 100, 255, 200));
         Raylib.DrawTextEx(font, "Tangent", new Vector2(50, legendY), smallFont, spacing, new Color(255, 100, 255, 255));
-        
+
         // Cyan - Adaptive
         Raylib.DrawCircleV(new Vector2(180, legendY + 8), 5, new Color(0, 220, 220, 200));
         Raylib.DrawTextEx(font, "Adaptive", new Vector2(200, legendY), smallFont, spacing, new Color(0, 255, 255, 255));
-        
+
         legendY += 22;
         // Blue trailing edge
         Raylib.DrawCircleV(new Vector2(30, legendY + 8), 5, new Color(80, 140, 255, 200));
         Raylib.DrawTextEx(font, "Trailing Edge", new Vector2(50, legendY), smallFont, spacing, new Color(100, 160, 255, 255));
     }
-    
+
     // Intercept Times Table (only in linear mode)
     if (!isCircularMode)
     {
@@ -1962,34 +1962,34 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         int tableHeight = 120;
         Raylib.DrawRectangle(10, tableY, 380, tableHeight, new Color(0, 0, 0, 200));
         Raylib.DrawRectangleLines(10, tableY, 380, tableHeight, new Color(80, 80, 100, 255));
-        
+
         Raylib.DrawTextEx(font, "INTERCEPT TIMES (ms)", new Vector2(20, tableY + 8), fontSize, spacing, Color.White);
         tableY += 28;
-        
+
         // Format times as milliseconds with color coding
         string FormatTime(double time) => time > 0 ? $"{time * 1000:F0}" : "-";
-        
+
         // Default (Green)
         Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(80, 255, 120, 220));
         Raylib.DrawTextEx(font, "Default:", new Vector2(50, tableY), fontSize, spacing, new Color(80, 255, 120, 255));
         Raylib.DrawTextEx(font, FormatTime(defaultInterceptTime), new Vector2(160, tableY), fontSize, spacing, Color.White);
-        
+
         tableY += 22;
-        
+
         // Tangent (Magenta)
         Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(255, 100, 255, 200));
         Raylib.DrawTextEx(font, "Tangent:", new Vector2(50, tableY), fontSize, spacing, new Color(255, 100, 255, 255));
         Raylib.DrawTextEx(font, FormatTime(tangentInterceptTime), new Vector2(160, tableY), fontSize, spacing, Color.White);
-        
+
         tableY += 22;
-        
+
         // Adaptive (Cyan)
         Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(0, 220, 220, 200));
         Raylib.DrawTextEx(font, "Adaptive:", new Vector2(50, tableY), fontSize, spacing, new Color(0, 255, 255, 255));
         Raylib.DrawTextEx(font, FormatTime(adaptiveInterceptTime), new Vector2(160, tableY), fontSize, spacing, Color.White);
-        
+
         tableY += 22;
-        
+
         // Trailing Edge (Blue)
         Raylib.DrawCircleV(new Vector2(30, tableY + 9), 5, new Color(80, 140, 255, 200));
         Raylib.DrawTextEx(font, "Trailing:", new Vector2(50, tableY), fontSize, spacing, new Color(100, 160, 255, 255));

@@ -151,7 +151,7 @@ public sealed class Ultimate : IPrediction
         if (mResult.HasValue)
         {
             var hit = mResult.Value;
-            
+
             // Still calculate confidence and range correctly
             double mFlightTime = Math.Max(0, hit.InterceptTime - input.Skillshot.Delay);
             double mTravelDistance = input.Skillshot.Speed * mFlightTime;

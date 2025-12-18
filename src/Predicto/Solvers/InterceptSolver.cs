@@ -665,7 +665,7 @@ public sealed class InterceptSolver
 
         // Adaptive: center of trailing edge (DirectBehind) and tangent methods
         Point2D directBehindPoint = targetPosition + behindDir * hitRadius;
-        
+
         // Midpoint of the chord between Tangent and DirectBehind
         Point2D centerPoint = new Point2D(
             (directBehindPoint.X + tangentPoint.X) * 0.5,
@@ -2590,7 +2590,7 @@ public sealed class InterceptSolver
                 if (Brent.TryFindRoot(collisionFunc, prevT, currentT, Constants.Epsilon, 100, out double hitTime))
                 {
                     Point2D hitPos = path.GetPositionAtTime(hitTime);
-                    
+
                     // Verify range
                     double travelDist = speed * (hitTime - delay);
                     if (travelDist <= skillshotRange + Constants.RangeTolerance)
@@ -2641,7 +2641,7 @@ public sealed class InterceptSolver
         // Sug 3: Caster Offset + Sug 2: Rectangular front
         // Effective combined radius for minimal contact
         double combinedR = targetRadius + casterRadius;
-        
+
         // Solve: |P + V*t - C| = s*(t - delay) + combinedR
         // Let D = P - C, d = delay, s = skillshotSpeed, r = combinedR
         // |D + V*t| = s*(t - d) + r
@@ -2654,7 +2654,7 @@ public sealed class InterceptSolver
 
         double s = skillshotSpeed;
         double K = s * castDelay - combinedR;
-        
+
         var D = targetPosition - casterPosition;
         var V = targetVelocity;
 
@@ -2664,7 +2664,7 @@ public sealed class InterceptSolver
         {
             return (posAtDelay, posAtDelay, castDelay);
         }
-        
+
         double a = V.DotProduct(V) - s * s;
         double b = 2 * D.DotProduct(V) + 2 * s * K;
         double c = D.DotProduct(D) - K * K;
@@ -2698,7 +2698,7 @@ public sealed class InterceptSolver
 
         double tResult = bestT.Value;
         Point2D hitPos = targetPosition + targetVelocity * tResult;
-        
+
         // Range check
         double travelDist = s * (tResult - castDelay);
         if (travelDist > skillshotRange + Constants.RangeTolerance) return null;
@@ -2845,7 +2845,7 @@ public sealed class InterceptSolver
                 // Calculate aim point using strategy at the actual intercept time
                 Point2D predictedPos = path.GetPositionAtTime(interceptTime);
                 Vector2D velocityAtIntercept = path.GetVelocityAtTime(interceptTime);
-                
+
                 Point2D aimPoint = CalculateBehindInitialPoint(
                     casterPosition, predictedPos, velocityAtIntercept, effectiveRadius, behindMargin, strategy);
 
@@ -3006,15 +3006,15 @@ public sealed class InterceptSolver
             if (interceptResult.HasValue)
             {
                 double interceptTime = interceptResult.Value;
-                
+
                 // FIX: Calculate aim point using velocity at intercept time
                 Point2D predictedPos = path.GetPositionAtTime(interceptTime);
                 Vector2D velocityAtIntercept = path.GetVelocityAtTime(interceptTime);
-                
-                Vector2D moveDirectionAtIntercept = velocityAtIntercept.Length > Constants.Epsilon 
-                    ? velocityAtIntercept.Normalize() 
+
+                Vector2D moveDirectionAtIntercept = velocityAtIntercept.Length > Constants.Epsilon
+                    ? velocityAtIntercept.Normalize()
                     : moveDirection;
-                
+
                 Point2D aimPoint = predictedPos + moveDirectionAtIntercept.Negate() * behindDistance;
 
                 // Verify hit - the separation should be approximately behindDistance
@@ -3087,7 +3087,7 @@ public sealed class InterceptSolver
         {
             // Sug: Use inbuilt MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
-            
+
             double? t1 = root1.Imaginary == 0 ? root1.Real : null;
             double? t2 = root2.Imaginary == 0 ? root2.Real : null;
 

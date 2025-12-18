@@ -187,7 +187,7 @@ public static class OffPathAimPointSolver
         // Sug 4: Continuous Collision Detection (CCD)
         // Iterative refinement using Brent's method to find the true intercept time
         // for an off-path aim point. This is more robust than a fixed 5-iteration loop.
-        
+
         Func<double, double> timeResidual = t =>
         {
             var pos = path.GetPositionAtTime(t);
@@ -276,7 +276,7 @@ public static class OffPathAimPointSolver
             return null;
 
         Vector2D shotDirection = toAim / aimDistance;
-        
+
         // Perpendicular to shot direction (for calculating distance to line)
         Vector2D perpendicular = new Vector2D(-shotDirection.Y, shotDirection.X);
 
@@ -289,11 +289,11 @@ public static class OffPathAimPointSolver
         //        = |( (P - C) · perp ) + ( V · perp ) * t|
         //
         // Collision when d(t) = collisionRadius AND projectile has traveled far enough
-        
+
         Vector2D casterToTarget = targetPosition - casterPosition;
         double initialPerpDist = casterToTarget.DotProduct(perpendicular);
         double perpVelocity = targetVelocity.DotProduct(perpendicular);
-        
+
         // perpDist(t) = initialPerpDist + perpVelocity * t
         // |perpDist(t)| = collisionRadius
         //
@@ -302,7 +302,7 @@ public static class OffPathAimPointSolver
         // Case 2: initialPerpDist + perpVelocity * t = -collisionRadius
 
         double? t1 = null, t2 = null;
-        
+
         if (Math.Abs(perpVelocity) > Constants.Epsilon)
         {
             t1 = (collisionRadius - initialPerpDist) / perpVelocity;
@@ -318,14 +318,14 @@ public static class OffPathAimPointSolver
                 // Find when projectile reaches target's forward position
                 double forwardDist = casterToTarget.DotProduct(shotDirection);
                 double forwardVelocity = targetVelocity.DotProduct(shotDirection);
-                
+
                 // Projectile position along line at time t: speed * (t - delay)
                 // Target position along line at time t: forwardDist + forwardVelocity * t
                 // 
                 // Collision when projectile catches up to target (within collision radius):
                 // speed * (t - delay) >= forwardDist + forwardVelocity * t - collisionRadius
                 // (speed - forwardVelocity) * t >= forwardDist - collisionRadius + speed * delay
-                
+
                 double relativeSpeed = skillshotSpeed - forwardVelocity;
                 if (relativeSpeed > Constants.Epsilon)
                 {
@@ -342,23 +342,23 @@ public static class OffPathAimPointSolver
         // 1. t >= castDelay (projectile must have launched)
         // 2. Projectile has traveled far enough to reach the target's forward position
         // 3. Target is in front of caster (not behind)
-        
+
         double? bestTime = null;
-        
+
         foreach (double? tCandidate in new[] { t1, t2 })
         {
             if (!tCandidate.HasValue || tCandidate.Value < castDelay)
                 continue;
-                
+
             double t = tCandidate.Value;
-            
+
             // Where is the projectile at time t?
             double projectileForwardPos = skillshotSpeed * (t - castDelay);
-            
+
             // Where is the target (along the shot direction) at time t?
             Vector2D targetAtT = (targetPosition - casterPosition) + targetVelocity * t;
             double targetForwardPos = targetAtT.DotProduct(shotDirection);
-            
+
             // Projectile must have reached the target's position (within collision radius)
             // Projectile leading edge is at: projectileForwardPos + collisionRadius (we want edge contact)
             // Actually, for edge contact: projectileForwardPos >= targetForwardPos - collisionRadius
