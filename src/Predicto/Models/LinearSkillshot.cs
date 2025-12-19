@@ -12,7 +12,8 @@ public readonly record struct LinearSkillshot(
     double Speed,
     double Range,
     double Width,
-    double Delay)
+    double Delay,
+    double Acceleration = 0.0)
 {
 
     /// <summary>

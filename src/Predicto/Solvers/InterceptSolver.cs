@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MathNet.Numerics;
 using MathNet.Numerics.RootFinding;
 using MathNet.Spatial.Euclidean;
@@ -601,6 +602,58 @@ public sealed class InterceptSolver
         double projectileDistance = skillshotSpeed * flightTime + (effectiveRadius - margin);
 
         return distanceToTarget - projectileDistance;
+    }
+
+    /// <summary>
+    /// Performs an analytical check to determine if a path segment is mathematically reachable.
+    /// Used for rapid segment pruning before running expensive root-finding.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsSegmentReachable(
+        Point2D casterPos,
+        Point2D start,
+        Vector2D velocity,
+        double duration,
+        double skillshotSpeed,
+        double castDelay,
+        double range,
+        double effectiveRadius,
+        double segmentStartTime)
+    {
+        // Quick distance bounds
+        double minDistSq;
+        Vector2D d = start - casterPos;
+        double vDotD = velocity.DotProduct(d);
+        double vSq = velocity.DotProduct(velocity);
+
+        if (vSq < Constants.Epsilon)
+        {
+            minDistSq = d.DotProduct(d);
+        }
+        else
+        {
+            double tClosest = -vDotD / vSq;
+            if (tClosest <= 0) minDistSq = d.DotProduct(d);
+            else if (tClosest >= duration)
+            {
+                var endDisplacement = d + velocity * duration;
+                minDistSq = endDisplacement.DotProduct(endDisplacement);
+            }
+            else
+            {
+                minDistSq = d.DotProduct(d) - (vDotD * vDotD) / vSq;
+            }
+        }
+
+        // Analytical pruning: if the closest the target gets is beyond skillshot reach
+        double maxPossibleReach = skillshotSpeed * (segmentStartTime + duration - castDelay) + effectiveRadius;
+        if (minDistSq > (maxPossibleReach + Constants.RangeTolerance) * (maxPossibleReach + Constants.RangeTolerance))
+            return false;
+
+        if (minDistSq > (range + effectiveRadius + Constants.RangeTolerance) * (range + effectiveRadius + Constants.RangeTolerance))
+            return false;
+
+        return true;
     }
 
     /// <summary>
@@ -2482,8 +2535,14 @@ public sealed class InterceptSolver
             // Get velocity for this segment
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Try to find intercept within this segment
-            // We solve as if target starts at segment.Start at time segmentStartTime
+            // Sug 2: Analytical Segment Pruning
+            if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
+                skillshotSpeed, castDelay, skillshotRange, 0, segmentStartTime))
+            {
+                segmentStartTime = segmentEndTime;
+                continue;
+            }
+
             var interceptResult = SolveSegmentIntercept(
                 casterPosition,
                 segment.Start,
@@ -2707,6 +2766,77 @@ public sealed class InterceptSolver
     }
 
     /// <summary>
+    /// Solves for interception time considering both target and projectile acceleration.
+    /// Uses a quartic polynomial root solver (MathNet.Numerics).
+    /// </summary>
+    public static (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? SolveAccelerationInterceptDirect(
+        Point2D casterPosition,
+        Point2D targetPosition,
+        Vector2D targetVelocity,
+        Vector2D targetAcceleration,
+        double skillshotSpeed,
+        double skillshotAcceleration,
+        double castDelay,
+        double targetHitboxRadius,
+        double skillshotWidth,
+        double skillshotRange,
+        double casterRadius = 0)
+    {
+        double r = targetHitboxRadius + skillshotWidth / 2 + casterRadius;
+        double s = skillshotSpeed;
+        double a_p = skillshotAcceleration;
+        double d = castDelay;
+
+        // Shift target to its position at cast delay
+        // P(x) = P_0 + V_0*(x+d) + 0.5*a_t*(x+d)^2
+        // P(x) = (P_0 + V_0*d + 0.5*a_t*d^2) + (V_0 + a_t*d)x + 0.5*a_t*x^2
+        Point2D pPrime0 = targetPosition + targetVelocity * d + targetAcceleration * (0.5 * d * d);
+        Vector2D vPrime0 = targetVelocity + targetAcceleration * d;
+        Vector2D dVec = pPrime0 - casterPosition;
+        Vector2D a_t = targetAcceleration;
+
+        // Coefficients for the quartic polynomial k4*x^4 + k3*x^3 + k2*x^2 + k1*x + k0 = 0
+        // derived from |P(x) - C|^2 = (0.5*a_p*x^2 + s*x + r)^2
+        double k4 = 0.25 * (a_t.DotProduct(a_t) - a_p * a_p);
+        double k3 = vPrime0.DotProduct(a_t) - s * a_p;
+        double k2 = vPrime0.DotProduct(vPrime0) + dVec.DotProduct(a_t) - (s * s + r * a_p);
+        double k1 = 2 * dVec.DotProduct(vPrime0) - 2 * r * s;
+        double k0 = dVec.DotProduct(dVec) - r * r;
+
+        double[] coeffs = { k0, k1, k2, k3, k4 };
+        var roots = FindRoots.Polynomial(coeffs);
+
+        double? bestX = null;
+        double maxFlightTime = skillshotRange / Math.Max(s, Constants.MinVelocity); // Rough bound
+
+        foreach (var root in roots)
+        {
+            if (Math.Abs(root.Imaginary) < Constants.Epsilon)
+            {
+                double x = root.Real;
+                if (x >= -Constants.Epsilon)
+                {
+                    // Verify range and speed constraints
+                    double dist = 0.5 * a_p * x * x + s * x;
+                    if (dist >= -Constants.Epsilon && dist <= skillshotRange + Constants.RangeTolerance)
+                    {
+                        if (bestX == null || x < bestX.Value)
+                            bestX = x;
+                    }
+                }
+            }
+        }
+
+        if (!bestX.HasValue) return null;
+
+        double xResult = bestX.Value;
+        double tResult = xResult + d;
+        Point2D hitPos = targetPosition + targetVelocity * tResult + targetAcceleration * (0.5 * tResult * tResult);
+
+        return (hitPos, hitPos, tResult);
+    }
+
+    /// <summary>
     /// Solves for edge-to-edge intercept time when target is following a multi-waypoint path.
     /// Returns the earliest time when skillshot edge touches target hitbox.
     /// </summary>
@@ -2823,6 +2953,14 @@ public sealed class InterceptSolver
             double segmentDuration = segmentLength / path.Speed;
             double segmentEndTime = segmentStartTime + segmentDuration;
             Vector2D segmentVelocity = segment.Direction * path.Speed;
+
+            // Sug 2: Analytical Segment Pruning
+            if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
+                skillshotSpeed, castDelay, skillshotRange, effectiveRadius, segmentStartTime))
+            {
+                segmentStartTime = segmentEndTime;
+                continue;
+            }
 
             // Calculate strategy-specific initial point for this segment
             Point2D virtualStart = CalculateBehindInitialPoint(

@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using MathNet.Spatial.Euclidean;
 using Predicto.Models;
 using Predicto.Physics;
@@ -47,6 +50,12 @@ public sealed class Ultimate : IPrediction
 
         if (input.Skillshot.Range <= Constants.Epsilon)
             return new PredictionResult.Unreachable("Skillshot range must be positive");
+
+        // Sug 2: Reactive Path Simulation
+        if (input.Reactive)
+        {
+            return PredictReactive(input);
+        }
 
         // === Use Path-Based Prediction if Available ===
         if (input.HasPath)
@@ -436,10 +445,28 @@ public sealed class Ultimate : IPrediction
             return PredictStationary(input, distance, effectiveRadius);
         }
 
-        // Sug 6: Minimal Interception for velocity mode
+        // Sug 1: Acceleration-Aware Kinematics
         (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = null;
 
-        if (input.MinimizeTime)
+        bool hasAcceleration = input.TargetAcceleration.DotProduct(input.TargetAcceleration) > Constants.Epsilon || 
+                              Math.Abs(input.Skillshot.Acceleration) > Constants.Epsilon;
+
+        if (hasAcceleration)
+        {
+            result = InterceptSolver.SolveAccelerationInterceptDirect(
+                input.CasterPosition,
+                input.TargetPosition,
+                input.TargetVelocity,
+                input.TargetAcceleration,
+                input.Skillshot.Speed,
+                input.Skillshot.Acceleration,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                input.MinimizeTime ? input.CasterHitboxRadius : 0);
+        }
+        else if (input.MinimizeTime)
         {
             result = InterceptSolver.SolveMinimalInterceptDirect(
                 input.CasterPosition,
@@ -454,13 +481,7 @@ public sealed class Ultimate : IPrediction
         }
         else
         {
-            // === Calculate Adaptive Margin ===
-            // Use half of spell width as base margin for more reliable hits
             double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
-
-            // === Solve BEHIND-TARGET Interception (Direct Closed-Form) ===
-            // We aim slightly inside the target's trailing edge (behind their movement).
-            // The behind-point moves linearly, so interception uses a quadratic solve.
             result = InterceptSolver.SolveBehindTargetDirect(
                 input.CasterPosition,
                 input.TargetPosition,
@@ -906,6 +927,68 @@ public sealed class Ultimate : IPrediction
             Confidence: 1.0);
     }
 
+    /// <summary>
+    /// Performs reactive path simulation using the danger field of the incoming skillshot.
+    /// This accounts for the target trying to dodge the ability.
+    /// </summary>
+    private PredictionResult PredictReactive(PredictionInput input)
+    {
+        // 1. Calculate base aim point using standard strategy
+        var baseResult = Predict(input with { Reactive = false });
+        if (baseResult is not PredictionResult.Hit baseHit) return baseResult;
+
+        // 2. Initialize Danger Field for the estimated shot
+        Vector2D dir = (baseHit.CastPosition - input.CasterPosition).Normalize();
+        var dangerField = new LinearDangerField(input.CasterPosition, dir, input.Skillshot);
+
+        // 3. Simulate target behavior
+        var state = new ParticleState(input.TargetPosition, input.TargetVelocity);
+        
+        AccelerationFunction dodgeBehavior = (in ParticleState s, double t, out double ax, out double ay) =>
+        {
+            // Repulsive force from danger field
+            dangerField.Force(s.Position, t, out double fx, out double fy);
+            
+            // Limit acceleration to target's capabilities (simplified)
+            double maxAcc = 2000.0; 
+            double forceLen = Math.Sqrt(fx * fx + fy * fy);
+            if (forceLen > maxAcc)
+            {
+                fx = (fx / forceLen) * maxAcc;
+                fy = (fy / forceLen) * maxAcc;
+            }
+            
+            ax = fx + input.TargetAcceleration.X;
+            ay = fy + input.TargetAcceleration.Y;
+        };
+
+        // 4. Integrate until collision or max time
+        double maxSimTime = baseHit.InterceptTime * 1.5;
+        double dt = Constants.TickDuration;
+        
+        bool hit = StructOdeSolver.IntegrateUntil(
+            ref state, 0, maxSimTime, dt, dodgeBehavior,
+            (s, t) => {
+                double travelDist = input.Skillshot.Speed * Math.Max(0, t - input.Skillshot.Delay);
+                Point2D projPos = input.CasterPosition + dir * travelDist;
+                return (s.Position - projPos).Length <= (input.TargetHitboxRadius + input.Skillshot.Width/2);
+            },
+            out double hitTime);
+
+        if (hit)
+        {
+            // If the simulation still results in a hit, update with simulated position
+            return new PredictionResult.Hit(
+                CastPosition: baseHit.CastPosition,
+                PredictedTargetPosition: state.Position,
+                InterceptTime: hitTime,
+                Confidence: baseHit.Confidence * 0.9); // Slight confidence penalty for simulation uncertainty
+        }
+
+        // Target dodged or moved away in simulation
+        return new PredictionResult.Unreachable("Target is likely to dodge this trajectory");
+    }
+
     #region Circular Skillshot Prediction
 
     /// <inheritdoc />
@@ -1148,20 +1231,35 @@ public sealed class Ultimate : IPrediction
 
         var results = new List<RankedTarget>(targets.Length);
 
-        foreach (var target in targets)
+        // Sug 4: SIMD-Vectorized Pre-filtering
+        Span<bool> reachable = targets.Length <= 256 ? stackalloc bool[targets.Length] : new bool[targets.Length];
+        PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
+
+        for (int i = 0; i < targets.Length; i++)
         {
-            var input = new PredictionInput(
-                casterPosition,
-                target.Position,
-                target.Velocity,
-                skillshot,
-                target.HitboxRadius,
-                target.Path,
-                Strategy: target.Strategy);
+            var target = targets[i];
+            PredictionResult result;
 
-            var result = Predict(input);
+            if (!reachable[i])
+            {
+                // Instant out of range
+                result = new PredictionResult.OutOfRange((target.Position - casterPosition).Length, skillshot.Range);
+            }
+            else
+            {
+                var input = new PredictionInput(
+                    casterPosition,
+                    target.Position,
+                    target.Velocity,
+                    skillshot,
+                    target.HitboxRadius,
+                    target.Path,
+                    Strategy: target.Strategy);
+
+                result = Predict(input);
+            }
+
             double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
-
             results.Add(new RankedTarget(target, result, priorityScore));
         }
 
@@ -1188,20 +1286,34 @@ public sealed class Ultimate : IPrediction
 
         var results = new List<RankedTarget>(targets.Length);
 
-        foreach (var target in targets)
+        // Sug 4: SIMD-Vectorized Pre-filtering
+        Span<bool> reachable = targets.Length <= 256 ? stackalloc bool[targets.Length] : new bool[targets.Length];
+        PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
+
+        for (int i = 0; i < targets.Length; i++)
         {
-            var input = new CircularPredictionInput(
-                casterPosition,
-                target.Position,
-                target.Velocity,
-                skillshot,
-                target.HitboxRadius,
-                target.Path,
-                Strategy: target.Strategy);
+            var target = targets[i];
+            PredictionResult result;
 
-            var result = PredictCircular(input);
+            if (!reachable[i])
+            {
+                result = new PredictionResult.OutOfRange((target.Position - casterPosition).Length, skillshot.Range);
+            }
+            else
+            {
+                var input = new CircularPredictionInput(
+                    casterPosition,
+                    target.Position,
+                    target.Velocity,
+                    skillshot,
+                    target.HitboxRadius,
+                    target.Path,
+                    Strategy: target.Strategy);
+
+                result = PredictCircular(input);
+            }
+
             double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
-
             results.Add(new RankedTarget(target, result, priorityScore));
         }
 
@@ -1310,6 +1422,56 @@ public sealed class Ultimate : IPrediction
         score *= 0.8 + 0.2 * rangeEfficiency;
 
         return score;
+    }
+
+    /// <summary>
+    /// Performs SIMD-accelerated pre-filtering of targets to improve ranking speed.
+    /// Filters out targets that are mathematically impossible to hit based on range.
+    /// </summary>
+    private void PreFilterTargetsSimd(
+        Point2D casterPos,
+        double maxRange,
+        ReadOnlySpan<TargetCandidate> targets,
+        Span<bool> outReachable)
+    {
+        if (!Avx2.IsSupported || targets.Length < 4)
+        {
+            for (int i = 0; i < targets.Length; i++)
+            {
+                double dist = (targets[i].Position - casterPos).Length;
+                outReachable[i] = dist <= maxRange + targets[i].HitboxRadius + 1000; // Generous buffer
+            }
+            return;
+        }
+
+        int iSimd = 0;
+        Vector256<double> cx = Vector256.Create(casterPos.X);
+        Vector256<double> cy = Vector256.Create(casterPos.Y);
+        Vector256<double> rangeLimit = Vector256.Create(maxRange + 1500); // Generous buffer
+
+        for (; iSimd <= targets.Length - 4; iSimd += 4)
+        {
+            Vector256<double> tx = Vector256.Create(targets[iSimd].Position.X, targets[iSimd+1].Position.X, targets[iSimd+2].Position.X, targets[iSimd+3].Position.X);
+            Vector256<double> ty = Vector256.Create(targets[iSimd].Position.Y, targets[iSimd+1].Position.Y, targets[iSimd+2].Position.Y, targets[iSimd+3].Position.Y);
+
+            Vector256<double> dx = Avx.Subtract(tx, cx);
+            Vector256<double> dy = Avx.Subtract(ty, cy);
+            Vector256<double> distSq = Avx.Add(Avx.Multiply(dx, dx), Avx.Multiply(dy, dy));
+            Vector256<double> limitSq = Avx.Multiply(rangeLimit, rangeLimit);
+            
+            Vector256<double> mask = Avx.CompareLessThanOrEqual(distSq, limitSq);
+            
+            outReachable[iSimd] = mask.GetElement(0) != 0;
+            outReachable[iSimd+1] = mask.GetElement(1) != 0;
+            outReachable[iSimd+2] = mask.GetElement(2) != 0;
+            outReachable[iSimd+3] = mask.GetElement(3) != 0;
+        }
+
+        for (; iSimd < targets.Length; iSimd++)
+        {
+            double dist = (targets[iSimd].Position - casterPos).Length;
+            outReachable[iSimd] = dist <= maxRange + targets[iSimd].HitboxRadius + 1000;
+        }
     }
 
     #endregion
