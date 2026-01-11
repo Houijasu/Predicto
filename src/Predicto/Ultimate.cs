@@ -51,10 +51,12 @@ public sealed class Ultimate : IPrediction
         if (input.Skillshot.Range <= Constants.Epsilon)
             return new PredictionResult.Unreachable("Skillshot range must be positive");
 
-        // Sug 2: Reactive Path Simulation
+        // Reactive path simulation (experimental)
         if (input.Reactive)
         {
+#pragma warning disable CS0618 // Intentional call to experimental method
             return PredictReactive(input);
+#pragma warning restore CS0618
         }
 
         // === Use Path-Based Prediction if Available ===
@@ -931,6 +933,24 @@ public sealed class Ultimate : IPrediction
     /// Performs reactive path simulation using the danger field of the incoming skillshot.
     /// This accounts for the target trying to dodge the ability.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>⚠️ EXPERIMENTAL:</strong> This method is experimental and not fully tested.
+    /// The reactive simulation model makes simplifying assumptions about target behavior
+    /// that may not reflect real gameplay scenarios. Use with caution.
+    /// </para>
+    /// <para>
+    /// Known limitations:
+    /// <list type="bullet">
+    /// <item>Assumes constant maximum acceleration for dodge behavior</item>
+    /// <item>Danger field model is simplified and may not match actual player reactions</item>
+    /// <item>No validation against real gameplay data</item>
+    /// </list>
+    /// </para>
+    /// </remarks>
+    /// <param name="input">The prediction input parameters.</param>
+    /// <returns>A prediction result, with reduced confidence due to simulation uncertainty.</returns>
+    [Obsolete("Reactive prediction is experimental and not fully tested. Use at your own risk.")]
     private PredictionResult PredictReactive(PredictionInput input)
     {
         // 1. Calculate base aim point using standard strategy
