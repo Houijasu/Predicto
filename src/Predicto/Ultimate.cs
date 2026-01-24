@@ -189,6 +189,65 @@ public sealed class Ultimate : IPrediction
                 Confidence: mConfidence);
         }
 
+        // === Gagong Strategy: Use dedicated minimum-time behind-edge solver ===
+        if (input.Strategy == BehindEdgeStrategy.Gagong)
+        {
+            var gagongResult = InterceptSolver.SolveGagongIntercept(
+                input.CasterPosition,
+                path,
+                input.Skillshot.Speed,
+                input.Skillshot.Delay,
+                input.TargetHitboxRadius,
+                input.Skillshot.Width,
+                input.Skillshot.Range,
+                behindMargin: Constants.TrailingEdgeMargin);
+
+            if (!gagongResult.HasValue)
+            {
+                return new PredictionResult.Unreachable("No valid Gagong interception solution exists along target path");
+            }
+
+            var gagongHit = gagongResult.Value;
+            double gagongFlightTime = Math.Max(0, gagongHit.InterceptTime - input.Skillshot.Delay);
+            double gagongTravelDistance = input.Skillshot.Speed * gagongFlightTime;
+
+            if (gagongTravelDistance > input.Skillshot.Range + Constants.RangeTolerance)
+            {
+                return new PredictionResult.OutOfRange(gagongTravelDistance, input.Skillshot.Range);
+            }
+
+            double gagongConfidence = CalculateEnhancedConfidence(
+                gagongHit.InterceptTime,
+                distance,
+                path.Speed,
+                input.Skillshot.Speed,
+                input.Skillshot.Range,
+                input.Skillshot.Delay,
+                displacement,
+                currentVelocity);
+
+            if (gagongHit.WaypointIndex > path.CurrentWaypointIndex)
+            {
+                int waypointDelta = gagongHit.WaypointIndex - path.CurrentWaypointIndex;
+                double waypointPenalty = Math.Pow(0.5, waypointDelta);
+                gagongConfidence *= waypointPenalty;
+            }
+
+            double gagongRemainingPathTime = path.GetRemainingPathTime();
+            if (gagongRemainingPathTime > Constants.Epsilon)
+            {
+                double segmentProgress = Math.Clamp(gagongHit.InterceptTime / gagongRemainingPathTime, 0, 1);
+                double segmentPenalty = 1 - 0.5 * segmentProgress;
+                gagongConfidence *= segmentPenalty;
+            }
+
+            return new PredictionResult.Hit(
+                CastPosition: gagongHit.AimPoint,
+                PredictedTargetPosition: gagongHit.PredictedTargetPosition,
+                InterceptTime: gagongHit.InterceptTime,
+                Confidence: Math.Clamp(gagongConfidence, Constants.Epsilon, 1.0));
+        }
+
         // === Calculate Adaptive Margin with Path-End Blending ===
         double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
 

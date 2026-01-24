@@ -1092,4 +1092,172 @@ public class UltimateTests
     }
 
     #endregion
+
+    #region Gagong Strategy Tests
+
+    [Fact]
+    public void Gagong_BasicHit_ReturnsValidResult()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(800, 0),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+        Assert.True(hit.Confidence > 0);
+    }
+
+    [Fact]
+    public void Gagong_AimPointIsBehindTarget()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(1000, 0),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        Assert.True(hit.CastPosition.X < hit.PredictedTargetPosition.X,
+            $"Gagong aim ({hit.CastPosition.X:F1}) should be behind target ({hit.PredictedTargetPosition.X:F1})");
+    }
+
+    [Fact]
+    public void Gagong_VerticalMovement_AimsBehindVertically()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(400, 600),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        Assert.True(hit.CastPosition.Y < hit.PredictedTargetPosition.Y,
+            $"Gagong aim Y ({hit.CastPosition.Y:F1}) should be behind target Y ({hit.PredictedTargetPosition.Y:F1})");
+    }
+
+    [Fact]
+    public void Gagong_OutOfRange_ReturnsOutOfRange()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(1200, 0),
+            destination: new Point2D(2000, 0),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 800, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.True(result is PredictionResult.OutOfRange or PredictionResult.Unreachable);
+    }
+
+    [Fact]
+    public void Gagong_StationaryTarget_FallsBackToEdge()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(400, 0),
+            speed: 0);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(Math.Abs(hit.CastPosition.X - 400) < 1, "Stationary target should aim at target position");
+    }
+
+    [Fact]
+    public void Gagong_VsAdaptive_ProducesValidDifferentResults()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(800, 0),
+            speed: 350);
+
+        var baseInput = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65);
+
+        var gagongInput = baseInput with { Strategy = BehindEdgeStrategy.Gagong };
+        var adaptiveInput = baseInput with { Strategy = BehindEdgeStrategy.Adaptive };
+
+        var gagongResult = _prediction.Predict(gagongInput);
+        var adaptiveResult = _prediction.Predict(adaptiveInput);
+
+        Assert.IsType<PredictionResult.Hit>(gagongResult);
+        Assert.IsType<PredictionResult.Hit>(adaptiveResult);
+
+        var gagongHit = (PredictionResult.Hit)gagongResult;
+        var adaptiveHit = (PredictionResult.Hit)adaptiveResult;
+
+        Assert.True(gagongHit.InterceptTime > 0);
+        Assert.True(adaptiveHit.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void Gagong_DiagonalPath_CorrectBehindDirection()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(300, 300),
+            destination: new Point2D(600, 600),
+            speed: 350);
+
+        var input = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
+            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+
+        Vector2D moveDir = new Vector2D(1, 1).Normalize();
+        Vector2D aimOffset = hit.CastPosition - hit.PredictedTargetPosition;
+        double behindness = aimOffset.DotProduct(moveDir.Negate());
+
+        Assert.True(behindness > 0, "Aim point should be in behind hemisphere");
+    }
+
+    #endregion
 }

@@ -31,7 +31,14 @@ public enum BehindEdgeStrategy
     /// A blend between DirectBehind and Tangent.
     /// Provides the most reliable hit by centering the aim point in the optimal collision zone.
     /// </summary>
-    Adaptive
+    Adaptive,
+
+    /// <summary>
+    /// Finds the minimum intercept time while constrained to hitting the trailing edge.
+    /// Searches for the optimal offset direction in the "behind" hemisphere to minimize
+    /// total time (cast delay + travel time). Path-based only.
+    /// </summary>
+    Gagong
 }
 
 public readonly record struct PredictionInput(
