@@ -1708,11 +1708,11 @@ public sealed class InterceptSolver
 
     /// <summary>
     /// Solves for center-to-center intercept time using quadratic formula
-    /// with Newton refinement for maximum precision.
+    /// with RobustNewtonRaphson refinement for maximum precision.
     /// 
     /// Strategy:
     /// 1. Use fast quadratic solver to get initial estimate
-    /// 2. Refine with Newton Method using an adaptive tolerance
+    /// 2. Refine with RobustNewtonRaphson (combines Newton with bisection fallback)
     /// </summary>
 
     public static double? SolveInterceptTimeWithSecantRefinement(
@@ -1725,7 +1725,7 @@ public sealed class InterceptSolver
         double tolerance = 1e-12)
     {
         // Back-compat entry point.
-        // Internally this now uses Newton refinement with an adaptive tolerance.
+        // Internally this now uses RobustNewtonRaphson refinement with automatic bisection fallback.
 
         double? initialEstimate = SolveInterceptTime(
             casterPosition,
@@ -1744,17 +1744,15 @@ public sealed class InterceptSolver
         var D = new Vector2D(displacement.X, displacement.Y);
 
         double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
-        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
 
-        double refined = RefineWithNewton(
+        double refined = RefineWithRobustNewton(
             D,
             targetVelocity,
             skillshotSpeed,
             castDelay,
             maxTime,
             initialEstimate.Value,
-            positionTolerance,
-            timeTolerance);
+            positionTolerance);
 
         if (refined <= castDelay || refined > maxTime)
             return initialEstimate;
@@ -2742,8 +2740,8 @@ public sealed class InterceptSolver
             // Sug: Use inbuilt MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
-            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
+            double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
+            double? t2 = Math.Abs(root2.Imaginary) < Constants.Epsilon ? root2.Real : null;
 
             bool v1 = t1.HasValue && t1 >= castDelay - Constants.Epsilon;
             bool v2 = t2.HasValue && t2 >= castDelay - Constants.Epsilon;
@@ -3226,8 +3224,8 @@ public sealed class InterceptSolver
             // Sug: Use inbuilt MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
-            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
+            double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
+            double? t2 = Math.Abs(root2.Imaginary) < Constants.Epsilon ? root2.Real : null;
 
             bool v1 = t1.HasValue && t1 > minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
             bool v2 = t2.HasValue && t2 > minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
@@ -3350,8 +3348,8 @@ public sealed class InterceptSolver
             // Sug: Use inbuilt MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
-            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
+            double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
+            double? t2 = Math.Abs(root2.Imaginary) < Constants.Epsilon ? root2.Real : null;
 
             // Valid times: T > adjustedDelay (projectile launched) and T in [0, segmentDuration]
             double minLocalTime = Math.Max(0, adjustedDelay);
@@ -3469,8 +3467,8 @@ public sealed class InterceptSolver
             // Sug: Use inbuilt MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
-            double? t1 = root1.Imaginary == 0 ? root1.Real : null;
-            double? t2 = root2.Imaginary == 0 ? root2.Real : null;
+            double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
+            double? t2 = Math.Abs(root2.Imaginary) < Constants.Epsilon ? root2.Real : null;
 
             bool v1 = t1.HasValue && t1 >= minLocalTime - Constants.Epsilon && t1 <= maxLocalTime + Constants.Epsilon;
             bool v2 = t2.HasValue && t2 >= minLocalTime - Constants.Epsilon && t2 <= maxLocalTime + Constants.Epsilon;
