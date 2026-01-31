@@ -1107,7 +1107,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 
@@ -1129,7 +1130,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 
@@ -1152,7 +1154,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 
@@ -1175,7 +1178,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 800, Width: 70, Delay: 0.25),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 
@@ -1194,7 +1198,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 
@@ -1245,7 +1250,8 @@ public class UltimateTests
             casterPosition: new Point2D(0, 0),
             path: path,
             skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
-            targetHitboxRadius: 65) with { Strategy = BehindEdgeStrategy.Gagong };
+            targetHitboxRadius: 65) with
+        { Strategy = BehindEdgeStrategy.Gagong };
 
         var result = _prediction.Predict(input);
 

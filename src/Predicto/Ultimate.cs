@@ -509,7 +509,7 @@ public sealed class Ultimate : IPrediction
         // Sug 1: Acceleration-Aware Kinematics
         (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = null;
 
-        bool hasAcceleration = input.TargetAcceleration.DotProduct(input.TargetAcceleration) > Constants.Epsilon || 
+        bool hasAcceleration = input.TargetAcceleration.DotProduct(input.TargetAcceleration) > Constants.Epsilon ||
                               Math.Abs(input.Skillshot.Acceleration) > Constants.Epsilon;
 
         if (hasAcceleration)
@@ -1022,21 +1022,21 @@ public sealed class Ultimate : IPrediction
 
         // 3. Simulate target behavior
         var state = new ParticleState(input.TargetPosition, input.TargetVelocity);
-        
+
         AccelerationFunction dodgeBehavior = (in ParticleState s, double t, out double ax, out double ay) =>
         {
             // Repulsive force from danger field
             dangerField.Force(s.Position, t, out double fx, out double fy);
-            
+
             // Limit acceleration to target's capabilities (simplified)
-            double maxAcc = 2000.0; 
+            double maxAcc = 2000.0;
             double forceLen = Math.Sqrt(fx * fx + fy * fy);
             if (forceLen > maxAcc)
             {
                 fx = (fx / forceLen) * maxAcc;
                 fy = (fy / forceLen) * maxAcc;
             }
-            
+
             ax = fx + input.TargetAcceleration.X;
             ay = fy + input.TargetAcceleration.Y;
         };
@@ -1044,13 +1044,14 @@ public sealed class Ultimate : IPrediction
         // 4. Integrate until collision or max time
         double maxSimTime = baseHit.InterceptTime * 1.5;
         double dt = Constants.TickDuration;
-        
+
         bool hit = StructOdeSolver.IntegrateUntil(
             ref state, 0, maxSimTime, dt, dodgeBehavior,
-            (s, t) => {
+            (s, t) =>
+            {
                 double travelDist = input.Skillshot.Speed * Math.Max(0, t - input.Skillshot.Delay);
                 Point2D projPos = input.CasterPosition + dir * travelDist;
-                return (s.Position - projPos).Length <= (input.TargetHitboxRadius + input.Skillshot.Width/2);
+                return (s.Position - projPos).Length <= (input.TargetHitboxRadius + input.Skillshot.Width / 2);
             },
             out double hitTime);
 
@@ -1530,20 +1531,20 @@ public sealed class Ultimate : IPrediction
 
         for (; iSimd <= targets.Length - 4; iSimd += 4)
         {
-            Vector256<double> tx = Vector256.Create(targets[iSimd].Position.X, targets[iSimd+1].Position.X, targets[iSimd+2].Position.X, targets[iSimd+3].Position.X);
-            Vector256<double> ty = Vector256.Create(targets[iSimd].Position.Y, targets[iSimd+1].Position.Y, targets[iSimd+2].Position.Y, targets[iSimd+3].Position.Y);
+            Vector256<double> tx = Vector256.Create(targets[iSimd].Position.X, targets[iSimd + 1].Position.X, targets[iSimd + 2].Position.X, targets[iSimd + 3].Position.X);
+            Vector256<double> ty = Vector256.Create(targets[iSimd].Position.Y, targets[iSimd + 1].Position.Y, targets[iSimd + 2].Position.Y, targets[iSimd + 3].Position.Y);
 
             Vector256<double> dx = Avx.Subtract(tx, cx);
             Vector256<double> dy = Avx.Subtract(ty, cy);
             Vector256<double> distSq = Avx.Add(Avx.Multiply(dx, dx), Avx.Multiply(dy, dy));
             Vector256<double> limitSq = Avx.Multiply(rangeLimit, rangeLimit);
-            
+
             Vector256<double> mask = Avx.CompareLessThanOrEqual(distSq, limitSq);
-            
+
             outReachable[iSimd] = mask.GetElement(0) != 0;
-            outReachable[iSimd+1] = mask.GetElement(1) != 0;
-            outReachable[iSimd+2] = mask.GetElement(2) != 0;
-            outReachable[iSimd+3] = mask.GetElement(3) != 0;
+            outReachable[iSimd + 1] = mask.GetElement(1) != 0;
+            outReachable[iSimd + 2] = mask.GetElement(2) != 0;
+            outReachable[iSimd + 3] = mask.GetElement(3) != 0;
         }
 
         for (; iSimd < targets.Length; iSimd++)
