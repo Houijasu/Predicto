@@ -7,7 +7,6 @@ namespace Predicto.Tests;
 
 public class InterceptSolverTests
 {
-    private readonly InterceptSolver _solver = new();
     private readonly Ultimate _prediction = new();
 
     #region Stationary Target Tests
@@ -198,14 +197,14 @@ public class InterceptSolverTests
 
         for (int i = 0; i < 512; i++)
         {
-            var caster = new Point2D(rng.NextDouble() * 2000 - 1000, rng.NextDouble() * 2000 - 1000);
-            var target = new Point2D(rng.NextDouble() * 2000 - 1000, rng.NextDouble() * 2000 - 1000);
+            var caster = new Point2D((rng.NextDouble() * 2000) - 1000, (rng.NextDouble() * 2000) - 1000);
+            var target = new Point2D((rng.NextDouble() * 2000) - 1000, (rng.NextDouble() * 2000) - 1000);
 
-            double targetSpeed = 50 + rng.NextDouble() * 650;
+            double targetSpeed = 50 + (rng.NextDouble() * 650);
             double theta = rng.NextDouble() * Math.PI * 2;
             var velocity = new Vector2D(Math.Cos(theta) * targetSpeed, Math.Sin(theta) * targetSpeed);
 
-            double skillshotSpeed = 800 + rng.NextDouble() * 2600;
+            double skillshotSpeed = 800 + (rng.NextDouble() * 2600);
             double delay = rng.NextDouble() * 0.75;
 
             var full = InterceptSolver.SolveBehindTargetWithFullRefinement(
@@ -492,7 +491,7 @@ public class InterceptSolverTests
         double hitbox = 65;
         double width = 40;
         double range = 1500;
-        double effectiveRadius = hitbox + width / 2;
+        double effectiveRadius = hitbox + (width / 2);
 
         var result = InterceptSolver.SolveBehindTargetWithSecantRefinement(
             casterPos, targetPos, targetVel,
@@ -504,13 +503,13 @@ public class InterceptSolverTests
 
         // Calculate actual arrival time
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
+        double arrivalTime = delay + (travelDist / speed);
 
         // Intercept time should match arrival time to high precision
         Assert.Equal(interceptTime, arrivalTime, precision: 10);
 
         // Target at arrival should be within effectiveRadius of aim point
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
         Assert.True(separation <= effectiveRadius,
             $"Separation {separation:F6} should be <= {effectiveRadius}");
@@ -528,7 +527,7 @@ public class InterceptSolverTests
         double hitbox = 65;
         double width = 40;
         double range = 20000;
-        double effectiveRadius = hitbox + width / 2;
+        double effectiveRadius = hitbox + (width / 2);
 
         var result = InterceptSolver.SolveBehindTargetWithSecantRefinement(
             casterPos, targetPos, targetVel,
@@ -540,7 +539,7 @@ public class InterceptSolverTests
 
         // Verify arrival matches intercept time
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
+        double arrivalTime = delay + (travelDist / speed);
 
         Assert.Equal(interceptTime, arrivalTime, precision: 9);
     }
@@ -557,7 +556,7 @@ public class InterceptSolverTests
         double hitbox = 65;
         double width = 70;
         double range = 1100;
-        double effectiveRadius = hitbox + width / 2;
+        double effectiveRadius = hitbox + (width / 2);
 
         var result = InterceptSolver.SolveBehindTargetWithSecantRefinement(
             casterPos, targetPos, targetVel,
@@ -572,8 +571,8 @@ public class InterceptSolverTests
 
         // Verify hit
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        double arrivalTime = delay + (travelDist / speed);
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         Assert.True(separation <= effectiveRadius);
@@ -598,7 +597,7 @@ public class InterceptSolverTests
         Assert.True(time > 0);
 
         // Verify: at this time, projectile should reach target
-        var targetAtTime = targetPos + targetVel * time.Value;
+        var targetAtTime = targetPos + (targetVel * time.Value);
         double distToTarget = (targetAtTime - casterPos).Length;
         double projectileTraveled = 1500 * time.Value;
 
@@ -623,7 +622,7 @@ public class InterceptSolverTests
         double width = 40;
         double range = 1500;
         double margin = 1.0;
-        double effectiveRadius = hitbox + width / 2; // 85
+        double effectiveRadius = hitbox + (width / 2); // 85
 
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
@@ -637,8 +636,8 @@ public class InterceptSolverTests
 
         // Calculate actual separation at arrival
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        double arrivalTime = delay + (travelDist / speed);
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         // Separation should be EXACTLY (effectiveRadius - margin) = 84 pixels
@@ -659,7 +658,7 @@ public class InterceptSolverTests
         double width = 70;
         double range = 1000;
         double margin = 1.0;
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
@@ -671,8 +670,8 @@ public class InterceptSolverTests
 
         // Calculate separation
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        double arrivalTime = delay + (travelDist / speed);
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         // We should be exactly (effectiveRadius - 1) = 99 pixels from center
@@ -705,7 +704,7 @@ public class InterceptSolverTests
 
         // Calculate actual arrival time
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
+        double arrivalTime = delay + (travelDist / speed);
 
         // Should match to 15 decimal places
         Assert.Equal(interceptTime, arrivalTime, precision: 14);
@@ -739,7 +738,7 @@ public class InterceptSolverTests
         Assert.NotNull(fullResult);
 
         // Both should produce valid hits
-        double effectiveRadius = hitbox + width / 2;
+        double effectiveRadius = hitbox + (width / 2);
 
         // Calculate separations
         var (secantAim, _, _) = secantResult.Value;
@@ -748,11 +747,11 @@ public class InterceptSolverTests
         double secantDist = (secantAim - casterPos).Length;
         double fullDist = (fullAim - casterPos).Length;
 
-        double secantArrival = delay + secantDist / speed;
-        double fullArrival = delay + fullDist / speed;
+        double secantArrival = delay + (secantDist / speed);
+        double fullArrival = delay + (fullDist / speed);
 
-        var secantTarget = targetPos + targetVel * secantArrival;
-        var fullTarget = targetPos + targetVel * fullArrival;
+        var secantTarget = targetPos + (targetVel * secantArrival);
+        var fullTarget = targetPos + (targetVel * fullArrival);
 
         double secantSep = (secantAim - secantTarget).Length;
         double fullSep = (fullAim - fullTarget).Length;
@@ -774,7 +773,7 @@ public class InterceptSolverTests
         double hitbox = 65;
         double width = 70;
         double range = 1200;
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         double[] margins = { 0.5, 1.0, 2.0, 5.0, 10.0 };
 
@@ -789,8 +788,8 @@ public class InterceptSolverTests
             var (aimPoint, _, _) = result.Value;
 
             double travelDist = (aimPoint - casterPos).Length;
-            double arrivalTime = delay + travelDist / speed;
-            var targetAtArrival = targetPos + targetVel * arrivalTime;
+            double arrivalTime = delay + (travelDist / speed);
+            var targetAtArrival = targetPos + (targetVel * arrivalTime);
             double separation = (aimPoint - targetAtArrival).Length;
 
             double expectedSep = effectiveRadius - margin;
@@ -818,7 +817,7 @@ public class InterceptSolverTests
         Assert.True(time > 0);
 
         // Verify intercept equation: |D + V*t| = s*t
-        var targetAtTime = targetPos + targetVel * time.Value;
+        var targetAtTime = targetPos + (targetVel * time.Value);
         double distToTarget = (targetAtTime - casterPos).Length;
         double projectileTraveled = 1500 * time.Value;
 
@@ -845,9 +844,9 @@ public class InterceptSolverTests
 
         Assert.NotNull(t);
 
-        var aimAtTime = targetPos + targetVel * t.Value;
+        var aimAtTime = targetPos + (targetVel * t.Value);
         double travelDist = (aimAtTime - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
+        double arrivalTime = delay + (travelDist / speed);
 
         Assert.Equal(t.Value, arrivalTime, precision: 9);
     }
@@ -1056,7 +1055,7 @@ public class InterceptSolverTests
         double width = 70;
         double range = 1000;
         double margin = 0.0; // Zero margin - aim exactly at edge
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
@@ -1067,8 +1066,8 @@ public class InterceptSolverTests
         var (aimPoint, _, _) = result.Value;
 
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = delay + travelDist / speed;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        double arrivalTime = delay + (travelDist / speed);
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         // With zero margin, separation should equal effectiveRadius exactly
@@ -1152,7 +1151,7 @@ public class InterceptSolverTests
         double hitbox = 65;
         double width = 70;
         double range = 1000;
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         double? trailingTime = InterceptSolver.SolveEdgeInterceptTimeTrailing(
             casterPos, targetPos, targetVel,
@@ -1162,7 +1161,7 @@ public class InterceptSolverTests
 
         // For stationary target: trailingTime = delay + (distance + effectiveRadius) / speed
         // = 0.25 + (500 + 100) / 1000 = 0.25 + 0.6 = 0.85
-        double expected = delay + (500 + effectiveRadius) / speed;
+        double expected = delay + ((500 + effectiveRadius) / speed);
         Assert.Equal(expected, trailingTime.Value, precision: 10);
     }
 
@@ -1177,7 +1176,7 @@ public class InterceptSolverTests
         var targetVel = new Vector2D(0, 200);
         double hitbox = 65;
         double width = 70;
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         var input = new PredictionInput(
             CasterPosition: casterPos,
@@ -1523,7 +1522,7 @@ public class InterceptSolverTests
 
         Assert.NotNull(result);
         // For stationary targets, uses standard radius (hitbox + width/2)
-        Assert.Equal(hitbox + width / 2, result.Value.EffectiveRadius, precision: 1);
+        Assert.Equal(hitbox + (width / 2), result.Value.EffectiveRadius, precision: 1);
     }
 
     [Fact]
@@ -1578,6 +1577,161 @@ public class InterceptSolverTests
             skillshotRange: 1000);
 
         Assert.Null(result);
+    }
+
+    #endregion
+
+    #region SolveMinimalInterceptDirect Tests
+
+    [Fact]
+    public void SolveMinimalInterceptDirect_ReachableTarget_ReturnsNonNull()
+    {
+        var result = InterceptSolver.SolveMinimalInterceptDirect(
+            casterPosition: new Point2D(0, 0),
+            targetPosition: new Point2D(500, 0),
+            targetVelocity: new Vector2D(0, 300),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            casterRadius: 65);
+
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public void SolveMinimalInterceptDirect_UnreachableTarget_ReturnsNull()
+    {
+        var result = InterceptSolver.SolveMinimalInterceptDirect(
+            casterPosition: new Point2D(0, 0),
+            targetPosition: new Point2D(2000, 0),
+            targetVelocity: new Vector2D(500, 0),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 800,
+            casterRadius: 65);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SolveMinimalInterceptDirect_InterceptTimeIsPositive()
+    {
+        var result = InterceptSolver.SolveMinimalInterceptDirect(
+            casterPosition: new Point2D(0, 0),
+            targetPosition: new Point2D(500, 0),
+            targetVelocity: new Vector2D(0, 200),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            casterRadius: 65);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0,
+            $"Intercept time should be positive, got {result.Value.InterceptTime}");
+    }
+
+    [Fact]
+    public void SolveMinimalInterceptDirect_AimPointWithinRange()
+    {
+        var casterPos = new Point2D(0, 0);
+        double range = 1000;
+
+        var result = InterceptSolver.SolveMinimalInterceptDirect(
+            casterPosition: casterPos,
+            targetPosition: new Point2D(600, 0),
+            targetVelocity: new Vector2D(0, 300),
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: range,
+            casterRadius: 65);
+
+        Assert.NotNull(result);
+        double aimDistance = (result.Value.AimPoint - casterPos).Length;
+        Assert.True(aimDistance <= range + 1,
+            $"Aim point distance ({aimDistance:F1}) should be within range ({range})");
+    }
+
+    #endregion
+
+    #region SolvePathMinimalIntercept Tests
+
+    [Fact]
+    public void SolvePathMinimalIntercept_PathInRange_ReturnsNonNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = InterceptSolver.SolvePathMinimalIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            casterRadius: 65);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void SolvePathMinimalIntercept_PathOutOfRange_ReturnsNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(3000, 0) },
+            currentPosition: new Point2D(2500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = InterceptSolver.SolvePathMinimalIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 800,
+            casterRadius: 65);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SolvePathMinimalIntercept_WaypointIndexIsValid()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(400, 300), new Point2D(600, 300) },
+            currentPosition: new Point2D(400, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = InterceptSolver.SolvePathMinimalIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1200,
+            casterRadius: 65);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.WaypointIndex >= 0,
+            $"WaypointIndex should be non-negative, got {result.Value.WaypointIndex}");
+        Assert.True(result.Value.WaypointIndex <= 1,
+            $"WaypointIndex should be within path bounds, got {result.Value.WaypointIndex}");
     }
 
     #endregion

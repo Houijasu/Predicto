@@ -10,32 +10,32 @@ namespace Predicto;
 
 /// <summary>
 /// Ultimate prediction engine - state-of-the-art implementation.
-/// 
+///
 /// Uses BEHIND-TARGET strategy: aims BEHIND the target relative to their movement.
 /// If target is moving north, we aim south of their predicted position.
 /// The projectile arrives from behind - target cannot see it coming.
-/// 
+///
 /// Example:
 ///   Target moving: ↑ (north)
 ///   Predicted position: ●
 ///   Aim point (1px south): ○ ← projectile hits here, from behind
-/// 
+///
 /// Why behind-target is optimal:
 /// - Target cannot see projectile approaching from their movement direction
 /// - Must completely REVERSE direction to dodge
 /// - Psychologically much harder to react to
 /// - Projectile "catches up" from behind
-/// 
+///
 /// Technical features - Behind-target trailing-edge aiming:
 /// - Aim point is computed as a behind-offset of predicted target movement
 /// - Uses closed-form quadratic interception (no iterative refinement required)
-/// 
+///
 /// Performance optimizations:
 /// - Early exit for obvious misses (out of range + moving away)
 /// - Sanity checks for extreme velocities
 /// - Adaptive refinement: skip triple refinement for easy cases
 /// - Adaptive margin: dynamic behind-margin based on target speed/distance
-/// 
+///
 /// This ensures the projectile hits EXACTLY 1 pixel inside the collision zone
 /// from behind, achieving the intended "hit from behind by 1 pixel" strategy.
 /// </summary>
@@ -87,7 +87,7 @@ public sealed class Ultimate : IPrediction
         // === Use Path-Based Prediction if Available ===
         if (input.HasPath)
         {
-            return PredictWithPathPureTrailingEdge(input);
+            return PredictWithPath(input, pureTrailingEdge: true);
         }
 
         // === Velocity-Based Prediction (same as regular - no blending needed) ===
@@ -97,8 +97,10 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Path-based prediction for multi-waypoint target movement.
     /// Iterates through path segments to find optimal interception point.
+    /// When <paramref name="pureTrailingEdge"/> is true, skips hitscan/MinimizeTime/Gagong
+    /// fast paths and disables path-end blending (always uses full adaptive margin).
     /// </summary>
-    private PredictionResult PredictWithPath(PredictionInput input)
+    private PredictionResult PredictWithPath(PredictionInput input, bool pureTrailingEdge = false)
     {
         var path = input.TargetPath!;
 
@@ -108,7 +110,7 @@ public sealed class Ultimate : IPrediction
 
         // === Hitscan Fast Path ===
         // For instant beams (Lux R, Xerath Q, etc.), use dedicated hitscan solver
-        if (input.Skillshot.IsHitscan)
+        if (!pureTrailingEdge && input.Skillshot.IsHitscan)
         {
             return PredictHitscanWithPath(input);
         }
@@ -120,7 +122,7 @@ public sealed class Ultimate : IPrediction
         var currentVelocity = path.GetCurrentVelocity();
         var displacement = path.CurrentPosition - input.CasterPosition;
         double distance = displacement.Length;
-        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+        double effectiveRadius = input.TargetHitboxRadius + (input.Skillshot.Width / 2);
 
         // === Early Out: Target clearly out of range and moving away ===
         if (distance > input.Skillshot.Range + effectiveRadius)
@@ -128,7 +130,7 @@ public sealed class Ultimate : IPrediction
             double dotProduct = displacement.DotProduct(currentVelocity);
             if (dotProduct > 0) // Moving away
             {
-                double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
+                double maxReachTime = ((input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed) + input.Skillshot.Delay;
                 var futurePosition = path.GetPositionAtTime(maxReachTime);
                 double futureDistance = (futurePosition - input.CasterPosition).Length;
 
@@ -146,7 +148,7 @@ public sealed class Ultimate : IPrediction
         // Sug 6: Disable Path-End Blending and use Minimal Solver if requested
         (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, int WaypointIndex)? mResult = null;
 
-        if (input.MinimizeTime)
+        if (!pureTrailingEdge && input.MinimizeTime)
         {
             mResult = InterceptSolver.SolvePathMinimalIntercept(
                 input.CasterPosition,
@@ -190,7 +192,7 @@ public sealed class Ultimate : IPrediction
         }
 
         // === Gagong Strategy: Use dedicated minimum-time behind-edge solver ===
-        if (input.Strategy == BehindEdgeStrategy.Gagong)
+        if (!pureTrailingEdge && input.Strategy == BehindEdgeStrategy.Gagong)
         {
             var gagongResult = InterceptSolver.SolveGagongIntercept(
                 input.CasterPosition,
@@ -237,7 +239,7 @@ public sealed class Ultimate : IPrediction
             if (gagongRemainingPathTime > Constants.Epsilon)
             {
                 double segmentProgress = Math.Clamp(gagongHit.InterceptTime / gagongRemainingPathTime, 0, 1);
-                double segmentPenalty = 1 - 0.5 * segmentProgress;
+                double segmentPenalty = 1 - (0.5 * segmentProgress);
                 gagongConfidence *= segmentPenalty;
             }
 
@@ -248,17 +250,22 @@ public sealed class Ultimate : IPrediction
                 Confidence: Math.Clamp(gagongConfidence, Constants.Epsilon, 1.0));
         }
 
-        // === Calculate Adaptive Margin with Path-End Blending ===
+        // === Calculate Adaptive Margin with optional Path-End Blending ===
         double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
+        double behindMargin = adaptiveMargin;
 
-        // Calculate path-end blend factor to smoothly transition to center aim
-        // when target is near the end of their movement path
         double remainingPathTime = path.GetRemainingPathTime();
-        double estimatedInterceptTime = distance / input.Skillshot.Speed + input.Skillshot.Delay;
-        double blendFactor = CalculatePathEndBlendFactor(remainingPathTime, estimatedInterceptTime);
 
-        // Blend margin: behind-target when far from path end, center when near path end
-        double blendedMargin = BlendMarginForPathEnd(adaptiveMargin, effectiveRadius, blendFactor);
+        if (!pureTrailingEdge)
+        {
+            // Calculate path-end blend factor to smoothly transition to center aim
+            // when target is near the end of their movement path
+            double estimatedInterceptTime = (distance / input.Skillshot.Speed) + input.Skillshot.Delay;
+            double blendFactor = CalculatePathEndBlendFactor(remainingPathTime, estimatedInterceptTime);
+
+            // Blend margin: behind-target when far from path end, center when near path end
+            behindMargin = BlendMarginForPathEnd(adaptiveMargin, effectiveRadius, blendFactor);
+        }
 
         // === Solve Path-Based BEHIND-TARGET Interception ===
         var result = InterceptSolver.SolvePathBehindTargetIntercept(
@@ -269,7 +276,7 @@ public sealed class Ultimate : IPrediction
             input.TargetHitboxRadius,
             input.Skillshot.Width,
             input.Skillshot.Range,
-            behindMargin: blendedMargin,
+            behindMargin: behindMargin,
             strategy: input.Strategy);
 
         if (!result.HasValue)
@@ -320,115 +327,7 @@ public sealed class Ultimate : IPrediction
             double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
             // Apply mild penalty for predictions deep into the path (linear decay)
             // At 100% path progress: 0.5x confidence, at 50%: 0.75x
-            double segmentPenalty = 1 - 0.5 * segmentProgress;
-            confidence *= segmentPenalty;
-        }
-
-        return new PredictionResult.Hit(
-            CastPosition: interceptResult.AimPoint,
-            PredictedTargetPosition: interceptResult.PredictedTargetPosition,
-            InterceptTime: interceptResult.InterceptTime,
-            Confidence: Math.Clamp(confidence, Constants.Epsilon, 1.0));
-    }
-
-    /// <summary>
-    /// Path-based prediction with pure trailing-edge aiming (no path-end blending).
-    /// Always uses the full adaptive margin for behind-target aiming.
-    /// </summary>
-    private PredictionResult PredictWithPathPureTrailingEdge(PredictionInput input)
-    {
-        var path = input.TargetPath!;
-
-        // === Velocity Sanity Checks ===
-        if (path.Speed > Constants.MaxReasonableVelocity)
-            return new PredictionResult.Unreachable("Target velocity exceeds reasonable bounds");
-
-        if (input.Skillshot.Speed > Constants.MaxReasonableSkillshotSpeed)
-            return new PredictionResult.Unreachable("Skillshot speed exceeds reasonable bounds");
-
-        // === Geometry Setup (cache commonly used values) ===
-        var currentVelocity = path.GetCurrentVelocity();
-        var displacement = path.CurrentPosition - input.CasterPosition;
-        double distance = displacement.Length;
-        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
-
-        // === Early Out: Target clearly out of range and moving away ===
-        if (distance > input.Skillshot.Range + effectiveRadius)
-        {
-            double dotProduct = displacement.DotProduct(currentVelocity);
-            if (dotProduct > 0) // Moving away
-            {
-                double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
-                var futurePosition = path.GetPositionAtTime(maxReachTime);
-                double futureDistance = (futurePosition - input.CasterPosition).Length;
-
-                if (futureDistance > input.Skillshot.Range + effectiveRadius)
-                    return new PredictionResult.OutOfRange(distance - effectiveRadius, input.Skillshot.Range);
-            }
-        }
-
-        // === Stationary Target ===
-        if (path.Speed < Constants.MinVelocity)
-        {
-            return PredictStationary(input, distance, effectiveRadius);
-        }
-
-        // === Calculate Adaptive Margin (NO blending - pure trailing edge) ===
-        double adaptiveMargin = CalculateAdaptiveMargin(effectiveRadius);
-
-        // === Solve Path-Based BEHIND-TARGET Interception ===
-        var result = InterceptSolver.SolvePathBehindTargetIntercept(
-            input.CasterPosition,
-            path,
-            input.Skillshot.Speed,
-            input.Skillshot.Delay,
-            input.TargetHitboxRadius,
-            input.Skillshot.Width,
-            input.Skillshot.Range,
-            behindMargin: adaptiveMargin,
-            strategy: input.Strategy);  // Use full margin, no blending
-
-        if (!result.HasValue)
-        {
-            return new PredictionResult.Unreachable("No valid interception solution exists along target path");
-        }
-
-        var interceptResult = result.Value;
-
-        // === Range Validation ===
-        double flightTime = Math.Max(0, interceptResult.InterceptTime - input.Skillshot.Delay);
-        double travelDistance = input.Skillshot.Speed * flightTime;
-
-        if (travelDistance > input.Skillshot.Range + Constants.RangeTolerance)
-        {
-            return new PredictionResult.OutOfRange(travelDistance, input.Skillshot.Range);
-        }
-
-        // === Calculate Confidence ===
-        double remainingPathTime = path.GetRemainingPathTime();
-        double confidence = CalculateEnhancedConfidence(
-            interceptResult.InterceptTime,
-            distance,
-            path.Speed,
-            input.Skillshot.Speed,
-            input.Skillshot.Range,
-            input.Skillshot.Delay,
-            displacement,
-            currentVelocity);
-
-        // === Confidence Penalty for Late Waypoints ===
-        if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
-        {
-            int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
-            double waypointPenalty = Math.Pow(0.5, waypointDelta);
-            confidence *= waypointPenalty;
-        }
-
-        // === Confidence Penalty for Segment Distance ===
-        if (remainingPathTime > Constants.Epsilon)
-        {
-            double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
-            double segmentPenalty = 1 - 0.5 * segmentProgress;
+            double segmentPenalty = 1 - (0.5 * segmentProgress);
             confidence *= segmentPenalty;
         }
 
@@ -463,7 +362,7 @@ public sealed class Ultimate : IPrediction
         // === Geometry Setup (cache commonly used values) ===
         var displacement = input.TargetPosition - input.CasterPosition;
         double distance = displacement.Length;
-        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+        double effectiveRadius = input.TargetHitboxRadius + (input.Skillshot.Width / 2);
 
         // === Early Out: Target clearly out of range ===
         // If target is beyond max possible reach and moving away, no solution exists
@@ -476,11 +375,11 @@ public sealed class Ultimate : IPrediction
             {
                 // Calculate if target can possibly be caught using accurate vector math
                 // Max time = (range + effectiveRadius) / skillshotSpeed + delay
-                double maxReachTime = (input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed + input.Skillshot.Delay;
+                double maxReachTime = ((input.Skillshot.Range + effectiveRadius) / input.Skillshot.Speed) + input.Skillshot.Delay;
 
                 // Compute exact future position using vector math instead of magnitude approximation
                 // This handles angled movement correctly
-                var futureTargetPos = input.TargetPosition + input.TargetVelocity * maxReachTime;
+                var futureTargetPos = input.TargetPosition + (input.TargetVelocity * maxReachTime);
                 double futureDistance = (futureTargetPos - input.CasterPosition).Length;
 
                 if (futureDistance > input.Skillshot.Range + effectiveRadius)
@@ -604,7 +503,7 @@ public sealed class Ultimate : IPrediction
         // === Geometry Setup ===
         var displacement = input.TargetPosition - input.CasterPosition;
         double distance = displacement.Length;
-        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+        double effectiveRadius = input.TargetHitboxRadius + (input.Skillshot.Width / 2);
 
         // === Stationary Target Optimization ===
         double targetSpeed = input.TargetVelocity.Length;
@@ -640,7 +539,7 @@ public sealed class Ultimate : IPrediction
         if (!result.HasValue)
         {
             // Check if it's a range issue
-            Point2D predictedPos = input.TargetPosition + input.TargetVelocity * input.Skillshot.Delay;
+            Point2D predictedPos = input.TargetPosition + (input.TargetVelocity * input.Skillshot.Delay);
             double predictedDistance = (predictedPos - input.CasterPosition).Length;
 
             if (predictedDistance > input.Skillshot.Range + effectiveRadius)
@@ -660,14 +559,14 @@ public sealed class Ultimate : IPrediction
             interceptTime,
             distance,
             targetSpeed,
-            double.MaxValue, // Treat as infinite speed for confidence calculation
+            LinearSkillshot.HitscanSpeed, // Treat as infinite speed for confidence calculation
             input.Skillshot.Range,
             input.Skillshot.Delay,
             displacement,
             input.TargetVelocity);
 
         // Boost confidence slightly for hitscan (more reliable due to no travel time)
-        confidence = Math.Min(1.0, confidence * 1.1);
+        confidence = Math.Min(1.0, confidence * Constants.HitscanConfidenceBoost);
 
         return new PredictionResult.Hit(
             CastPosition: aimPoint,
@@ -687,7 +586,7 @@ public sealed class Ultimate : IPrediction
         // === Geometry Setup ===
         var displacement = path.CurrentPosition - input.CasterPosition;
         double distance = displacement.Length;
-        double effectiveRadius = input.TargetHitboxRadius + input.Skillshot.Width / 2;
+        double effectiveRadius = input.TargetHitboxRadius + (input.Skillshot.Width / 2);
 
         // === Stationary Target Optimization ===
         if (path.Speed < Constants.MinVelocity)
@@ -736,7 +635,7 @@ public sealed class Ultimate : IPrediction
             interceptResult.InterceptTime,
             distance,
             path.Speed,
-            double.MaxValue, // Treat as infinite speed for confidence calculation
+            LinearSkillshot.HitscanSpeed, // Treat as infinite speed for confidence calculation
             input.Skillshot.Range,
             input.Skillshot.Delay,
             displacement,
@@ -751,7 +650,7 @@ public sealed class Ultimate : IPrediction
         }
 
         // Boost confidence slightly for hitscan (more reliable due to no travel time)
-        confidence = Math.Min(1.0, confidence * 1.1);
+        confidence = Math.Min(1.0, confidence * Constants.HitscanConfidenceBoost);
 
         return new PredictionResult.Hit(
             CastPosition: interceptResult.AimPoint,
@@ -761,53 +660,15 @@ public sealed class Ultimate : IPrediction
     }
 
     /// <summary>
-    /// Determines if this is an "easy" prediction case that doesn't need full refinement.
-    /// 
-    /// Easy cases use only Secant refinement (faster).
-    /// Hard cases use full Triple Refinement (Quadratic → Secant → Bisection).
-    /// 
-    /// Criteria for easy case:
-    /// 1. Target moves less than half a unit per server tick (nearly stationary)
-    /// 2. Target moving significantly toward caster (easier geometry)
-    /// </summary>
-    private static bool IsEasyCase(
-        double distance,
-        double targetSpeed,
-        Vector2D displacement,
-        Vector2D targetVelocity,
-        double skillshotSpeed)
-    {
-        // Criterion 1: Target moves negligibly per tick
-        // If target moves < 0.5 units per tick, the prediction is trivial
-        // Formula: targetSpeed * tickDuration < 0.5
-        double movementPerTick = targetSpeed * Constants.TickDuration;
-        if (movementPerTick < 0.5)
-            return true;
-
-        // Criterion 2: Target moving toward caster (easier to hit)
-        // Dot product < 0 means moving toward caster
-        // We require significant approach: |cos(angle)| > 0.5 (within 60° of direct approach)
-        double dotProduct = displacement.DotProduct(targetVelocity);
-        if (dotProduct < 0 && distance > Constants.Epsilon)
-        {
-            double cosAngle = Math.Abs(dotProduct) / (targetSpeed * distance);
-            if (cosAngle > 0.5)
-                return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
     /// Calculates adaptive margin for the "behind target" strategy.
-    /// 
+    ///
     /// For linear skillshots, we aim at the trailing edge with a small margin for maximum
     /// aggressiveness. LoL uses swept collision detection between ticks, so edge hits register.
-    /// 
+    ///
     /// The margin uses a continuous function to avoid discontinuities at threshold boundaries.
     /// For very small effective radii, the margin scales proportionally to maintain valid geometry.
     /// For normal radii, we use a minimal but non-zero margin (1 game unit) for reliability.
-    /// 
+    ///
     /// Note: The InterceptSolver also clamps margin to ensure it's less than effectiveRadius,
     /// but we apply defensive clamping here as well for clarity.
     /// </summary>
@@ -843,7 +704,7 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Calculates the blend factor for transitioning from behind-target aim to center aim
     /// as the target approaches the end of their path.
-    /// 
+    ///
     /// Returns 0.0 when target has plenty of path remaining (use behind-target).
     /// Returns 1.0 when target is at or past path end (use center/fastest).
     /// Uses smoothstep for C1 continuous transition.
@@ -873,7 +734,7 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Calculates a blended margin that transitions from behind-target to center aim
     /// based on how close the target is to the end of their path.
-    /// 
+    ///
     /// When blendFactor = 0: returns adaptiveMargin (behind-target aim)
     /// When blendFactor = 1: returns effectiveRadius - epsilon (center aim, fastest intercept)
     /// </summary>
@@ -888,7 +749,7 @@ public sealed class Ultimate : IPrediction
         double centerMargin = effectiveRadius - Constants.Epsilon;
 
         // Linear interpolation between margins
-        return adaptiveMargin + (centerMargin - adaptiveMargin) * blendFactor;
+        return adaptiveMargin + ((centerMargin - adaptiveMargin) * blendFactor);
     }
 
     /// <summary>
@@ -929,7 +790,7 @@ public sealed class Ultimate : IPrediction
                 double cosAngle = Math.Abs(dotProduct / (displacementLength * velocityLength));
 
                 // Scale confidence: perpendicular (cos=0) → 0.5, parallel (cos=1) → 1.0
-                approachAngleFactor = 0.5 + 0.5 * cosAngle;
+                approachAngleFactor = 0.5 + (0.5 * cosAngle);
             }
         }
 
@@ -937,7 +798,7 @@ public sealed class Ultimate : IPrediction
         // Higher speeds relative to max suggest dashes/abilities - less predictable
         // Scale: at max velocity → 0.5x confidence
         double speedRatio = targetSpeed / Constants.MaxReasonableVelocity;
-        double consistencyFactor = 1.0 - speedRatio * 0.5;
+        double consistencyFactor = 1.0 - (speedRatio * 0.5);
 
         // === Reaction Time Factor ===
         // If projectile arrives before target can react, confidence increases
@@ -1030,7 +891,7 @@ public sealed class Ultimate : IPrediction
 
             // Limit acceleration to target's capabilities (simplified)
             double maxAcc = 2000.0;
-            double forceLen = Math.Sqrt(fx * fx + fy * fy);
+            double forceLen = Math.Sqrt((fx * fx) + (fy * fy));
             if (forceLen > maxAcc)
             {
                 fx = (fx / forceLen) * maxAcc;
@@ -1050,8 +911,8 @@ public sealed class Ultimate : IPrediction
             (s, t) =>
             {
                 double travelDist = input.Skillshot.Speed * Math.Max(0, t - input.Skillshot.Delay);
-                Point2D projPos = input.CasterPosition + dir * travelDist;
-                return (s.Position - projPos).Length <= (input.TargetHitboxRadius + input.Skillshot.Width / 2);
+                Point2D projPos = input.CasterPosition + (dir * travelDist);
+                return (s.Position - projPos).Length <= (input.TargetHitboxRadius + (input.Skillshot.Width / 2));
             },
             out double hitTime);
 
@@ -1139,7 +1000,7 @@ public sealed class Ultimate : IPrediction
         if (remainingPathTime > Constants.Epsilon && input.Skillshot.Delay > 0)
         {
             double pathProgress = input.Skillshot.Delay / remainingPathTime;
-            double pathPenalty = 1 - 0.5 * pathProgress;
+            double pathPenalty = 1 - (0.5 * pathProgress);
             confidence *= pathPenalty;
         }
 
@@ -1189,7 +1050,7 @@ public sealed class Ultimate : IPrediction
         if (!result.HasValue)
         {
             // Calculate where target will be for error reporting
-            Point2D predictedPos = input.TargetPosition + input.TargetVelocity * input.Skillshot.Delay;
+            Point2D predictedPos = input.TargetPosition + (input.TargetVelocity * input.Skillshot.Delay);
             double predictedDistance = (predictedPos - input.CasterPosition).Length;
             return new PredictionResult.OutOfRange(predictedDistance, input.Skillshot.Range);
         }
@@ -1213,7 +1074,7 @@ public sealed class Ultimate : IPrediction
 
             // Targets moving toward/away from caster are easier to predict
             // Targets moving perpendicular are harder (use same formula as linear)
-            double angleFactor = 0.5 + 0.5 * Math.Abs(cosAngle);
+            double angleFactor = 0.5 + (0.5 * Math.Abs(cosAngle));
             confidence *= angleFactor;
         }
 
@@ -1229,11 +1090,11 @@ public sealed class Ultimate : IPrediction
     /// Circular spells have different considerations than linear ones:
     /// - Only delay matters (no flight time)
     /// - Larger effective radius typically
-    /// 
+    ///
     /// For circular spells, aiming at the exact trailing edge (Epsilon margin)
     /// is risky because the target is moving away from the spell center.
     /// A grazing hit might miss if the target moves even slightly further.
-    /// 
+    ///
     /// Instead, we aim halfway between the center and the trailing edge.
     /// This maintains the "behind target" strategy (catching stops/reversals)
     /// while ensuring a solid hit on moving targets.
@@ -1283,13 +1144,13 @@ public sealed class Ultimate : IPrediction
 
     /// <summary>
     /// Evaluates multiple targets and returns them ranked by hit probability.
-    /// 
+    ///
     /// This method is useful for team fights or scenarios with multiple potential targets.
     /// It considers:
     /// - Prediction confidence (hit probability)
     /// - Target priority weight (optional, for focusing high-value targets)
     /// - Range efficiency (closer targets preferred when confidence is similar)
-    /// 
+    ///
     /// Example usage:
     /// <code>
     /// var targets = new[] { enemyAdc, enemySupport, enemyMid };
@@ -1312,7 +1173,7 @@ public sealed class Ultimate : IPrediction
         var results = new List<RankedTarget>(targets.Length);
 
         // Sug 4: SIMD-Vectorized Pre-filtering
-        Span<bool> reachable = targets.Length <= 256 ? stackalloc bool[targets.Length] : new bool[targets.Length];
+        Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
         PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
 
         for (int i = 0; i < targets.Length; i++)
@@ -1367,7 +1228,7 @@ public sealed class Ultimate : IPrediction
         var results = new List<RankedTarget>(targets.Length);
 
         // Sug 4: SIMD-Vectorized Pre-filtering
-        Span<bool> reachable = targets.Length <= 256 ? stackalloc bool[targets.Length] : new bool[targets.Length];
+        Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
         PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
 
         for (int i = 0; i < targets.Length; i++)
@@ -1455,14 +1316,14 @@ public sealed class Ultimate : IPrediction
 
     /// <summary>
     /// Calculates priority score for ranking targets.
-    /// 
+    ///
     /// Score components:
     /// - Confidence (0-1): Base hit probability
     /// - Priority weight (0-∞): User-defined target importance (e.g., ADC = 2.0, Tank = 0.5)
     /// - Range efficiency (0-1): Bonus for closer targets (reduces risk of interception)
-    /// 
+    ///
     /// Formula: Score = Confidence * PriorityWeight * (0.8 + 0.2 * RangeEfficiency)
-    /// 
+    ///
     /// The range efficiency contributes only 20% to allow priority and confidence to dominate,
     /// but still prefers closer targets when other factors are equal.
     /// </summary>
@@ -1499,7 +1360,7 @@ public sealed class Ultimate : IPrediction
         double rangeEfficiency = 1.0 - Math.Clamp(distance / skillshotRange, 0, 1);
 
         // Range efficiency contributes 20% to final score
-        score *= 0.8 + 0.2 * rangeEfficiency;
+        score *= 0.8 + (0.2 * rangeEfficiency);
 
         return score;
     }

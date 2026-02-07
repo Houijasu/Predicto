@@ -29,8 +29,13 @@ This provides:
 ## Implementation
 
 See `Ultimate.cs`:
-- `ComputeAdaptiveOffset()` - Blends DirectBehind and Tangent offsets
+- `CalculateAdaptiveMargin()` - Computes adaptive trailing-edge margin based on effective radius
 - `BehindEdgeStrategy` enum in `PredictionInput.cs`
+
+See `Solvers/OffPathAimPointSolver.cs`:
+- `CalculateAdaptive()` - Blends DirectBehind and Tangent aim points for path-based prediction
+- `CalculateDirectBehindPoint()` - Pure behind-target aim
+- `CalculateTangentPoint()` - Pure tangent-based aim
 
 ## Consequences
 

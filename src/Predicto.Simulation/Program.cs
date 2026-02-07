@@ -83,20 +83,20 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
 
     for (int i = 0; i < scenarios.Length; i++)
     {
-        double casterX = rng.NextDouble() * 2000 - 1000;
-        double casterY = rng.NextDouble() * 2000 - 1000;
-        double targetX = rng.NextDouble() * 2000 - 1000;
-        double targetY = rng.NextDouble() * 2000 - 1000;
+        double casterX = (rng.NextDouble() * 2000) - 1000;
+        double casterY = (rng.NextDouble() * 2000) - 1000;
+        double targetX = (rng.NextDouble() * 2000) - 1000;
+        double targetY = (rng.NextDouble() * 2000) - 1000;
 
         // Target speed in typical LoL-ish units.
-        double targetSpeed = 50 + rng.NextDouble() * 650;
+        double targetSpeed = 50 + (rng.NextDouble() * 650);
         double angle = rng.NextDouble() * Math.PI * 2;
         var vel = new Vector2D(Math.Cos(angle) * targetSpeed, Math.Sin(angle) * targetSpeed);
 
         // Skillshot parameters.
-        double skillshotSpeed = 800 + rng.NextDouble() * 2600;
+        double skillshotSpeed = 800 + (rng.NextDouble() * 2600);
         double castDelay = rng.NextDouble() * 0.75;
-        double skillshotRange = 800 + rng.NextDouble() * 2200;
+        double skillshotRange = 800 + (rng.NextDouble() * 2200);
 
         scenarios[i] = (new Point2D(casterX, casterY), new Point2D(targetX, targetY), vel, skillshotSpeed, castDelay, skillshotRange);
     }
@@ -181,7 +181,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
                 // Residual for center-to-center: |D + Vt| - s*max(0,t-d)
                 var displacement = s.Target - s.Caster;
                 var D = new Vector2D(displacement.X, displacement.Y);
-                var relative = D + s.Vel * t.Value;
+                var relative = D + (s.Vel * t.Value);
                 double dist = relative.Length;
                 double flight = Math.Max(0, t.Value - s.Delay);
                 double proj = s.Speed * flight;
@@ -237,7 +237,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         if (result.HasValue)
         {
             fullRefFound++;
-            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2 - margin;
+            double effectiveRadius = targetHitboxRadius + (skillshotWidth / 2) - margin;
             var aimToTarget = result.Value.PredictedTargetPosition - result.Value.AimPoint;
             fullRefResidualSum += Math.Abs(aimToTarget.Length - effectiveRadius);
         }
@@ -259,7 +259,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         if (result.HasValue)
         {
             directFound++;
-            double effectiveRadius = targetHitboxRadius + skillshotWidth / 2 - margin;
+            double effectiveRadius = targetHitboxRadius + (skillshotWidth / 2) - margin;
             var aimToTarget = result.Value.PredictedTargetPosition - result.Value.AimPoint;
             directResidualSum += Math.Abs(aimToTarget.Length - effectiveRadius);
         }
@@ -312,7 +312,7 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
 
     int fullRefHits = 0, fullRefMisses = 0;
     int directHits = 0, directMisses = 0;
-    double effectiveCollisionRadius = targetHitboxRadius + skillshotWidth / 2;
+    double effectiveCollisionRadius = targetHitboxRadius + (skillshotWidth / 2);
 
     // Track max difference between methods
     double maxTimeDiff = 0;
@@ -330,11 +330,11 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         if (fullRefResult.HasValue)
         {
             double t = fullRefResult.Value.InterceptTime;
-            var predictedTarget = s.Target + s.Vel * t;
+            var predictedTarget = s.Target + (s.Vel * t);
             var aimDir = (fullRefResult.Value.AimPoint - s.Caster);
             var aimDirNorm = aimDir / aimDir.Length;
             double flightTime = Math.Max(0, t - s.Delay);
-            var skillshotPos = s.Caster + aimDirNorm * s.Speed * flightTime;
+            var skillshotPos = s.Caster + (aimDirNorm * s.Speed * flightTime);
             double dist = (skillshotPos - predictedTarget).Length;
             if (dist <= effectiveCollisionRadius)
                 fullRefHits++;
@@ -350,11 +350,11 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         if (directResult.HasValue)
         {
             double t = directResult.Value.InterceptTime;
-            var predictedTarget = s.Target + s.Vel * t;
+            var predictedTarget = s.Target + (s.Vel * t);
             var aimDir = (directResult.Value.AimPoint - s.Caster);
             var aimDirNorm = aimDir / aimDir.Length;
             double flightTime = Math.Max(0, t - s.Delay);
-            var skillshotPos = s.Caster + aimDirNorm * s.Speed * flightTime;
+            var skillshotPos = s.Caster + (aimDirNorm * s.Speed * flightTime);
             double dist = (skillshotPos - predictedTarget).Length;
             if (dist <= effectiveCollisionRadius)
                 directHits++;
@@ -578,7 +578,7 @@ while (!Raylib.WindowShouldClose())
         var mousePos = Raylib.GetMousePosition();
         for (int i = 0; i < timeMultipliers.Length; i++)
         {
-            var btnRect = new Rectangle(btnX + i * (btnW + 5), btnY, btnW, btnH);
+            var btnRect = new Rectangle(btnX + (i * (btnW + 5)), btnY, btnW, btnH);
             if (Raylib.CheckCollisionPointRec(mousePos, btnRect))
             {
                 currentTimeIndex = i;
@@ -620,26 +620,9 @@ while (!Raylib.WindowShouldClose())
                 targetSpeed);
 
             // Find which segment the target is currently on
-            double remainingDistance = targetSpeed * pathElapsedTime;
-            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-            int currentWaypointIndex = 0;
-
-            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
-            {
-                var target = waypointsList[currentWaypointIndex];
-                var distanceToTarget = (target - position).Length;
-
-                if (distanceToTarget <= remainingDistance)
-                {
-                    position = target;
-                    remainingDistance -= distanceToTarget;
-                    currentWaypointIndex++;
-                }
-                else
-                {
-                    break;
-                }
-            }
+            var startPos2D = new Point2D(pathStartPos.X, pathStartPos.Y);
+            double distanceTravelled = targetSpeed * pathElapsedTime;
+            int currentWaypointIndex = FindCurrentWaypointIndex(waypointsList, startPos2D, distanceTravelled);
 
             if (currentWaypointIndex >= waypointsList.Count)
             {
@@ -693,26 +676,8 @@ while (!Raylib.WindowShouldClose())
                 0,
                 targetSpeed);
 
-            double remainingDistance = targetSpeed * pathElapsedTime;
-            var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-            int currentWaypointIndex = 0;
-
-            while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
-            {
-                var target = waypointsList[currentWaypointIndex];
-                var distanceToTarget = (target - position).Length;
-
-                if (distanceToTarget <= remainingDistance)
-                {
-                    position = target;
-                    remainingDistance -= distanceToTarget;
-                    currentWaypointIndex++;
-                }
-                else
-                {
-                    break;
-                }
-            }
+            double distanceTravelled2 = targetSpeed * pathElapsedTime;
+            int currentWaypointIndex = FindCurrentWaypointIndex(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), distanceTravelled2);
 
             if (currentWaypointIndex >= waypointsList.Count)
             {
@@ -762,7 +727,7 @@ while (!Raylib.WindowShouldClose())
 
         if (ultimateResult is PredictionResult.Hit hit)
         {
-            double effectiveRadius = targetHitbox + skillshotWidth / 2;
+            double effectiveRadius = targetHitbox + (skillshotWidth / 2);
 
             // Store default intercept time
             defaultInterceptTime = hit.InterceptTime;
@@ -855,22 +820,7 @@ while (!Raylib.WindowShouldClose())
                 var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
                 var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
 
-                double remainingDistance = targetSpeed * pathTotalTime;
-                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-                int currentWaypointIndex = 0;
-
-                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
-                {
-                    var target = waypointsList[currentWaypointIndex];
-                    var distanceToTarget = (target - position).Length;
-                    if (distanceToTarget <= remainingDistance)
-                    {
-                        position = target;
-                        remainingDistance -= distanceToTarget;
-                        currentWaypointIndex++;
-                    }
-                    else break;
-                }
+                int currentWaypointIndex = FindCurrentWaypointIndex(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), targetSpeed * pathTotalTime);
 
                 if (currentWaypointIndex >= waypointsList.Count)
                 {
@@ -915,22 +865,7 @@ while (!Raylib.WindowShouldClose())
                 var fullPath = new TargetPath(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), 0, targetSpeed);
                 var currentPathPos = fullPath.GetPositionAtTime(pathTotalTime);
 
-                double remainingDistance = targetSpeed * pathTotalTime;
-                var position = new Point2D(pathStartPos.X, pathStartPos.Y);
-                int currentWaypointIndex = 0;
-
-                while (remainingDistance > 0 && currentWaypointIndex < waypointsList.Count)
-                {
-                    var target = waypointsList[currentWaypointIndex];
-                    var distanceToTarget = (target - position).Length;
-                    if (distanceToTarget <= remainingDistance)
-                    {
-                        position = target;
-                        remainingDistance -= distanceToTarget;
-                        currentWaypointIndex++;
-                    }
-                    else break;
-                }
+                int currentWaypointIndex = FindCurrentWaypointIndex(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), targetSpeed * pathTotalTime);
 
                 if (currentWaypointIndex >= waypointsList.Count)
                 {
@@ -972,7 +907,7 @@ while (!Raylib.WindowShouldClose())
                 new Vector2((float)hit.PredictedTargetPosition.X, (float)hit.PredictedTargetPosition.Y));
             float effectiveRadius = isCircularFiring
                 ? (float)(targetHitbox + skillshotRadius)
-                : targetHitbox + skillshotWidth / 2;
+                : targetHitbox + (skillshotWidth / 2);
             float trailingEdgeDist = effectiveRadius - aimToTargetDist;
             float casterToAimDist = Vector2.Distance(casterPos, new Vector2((float)hit.CastPosition.X, (float)hit.CastPosition.Y));
 
@@ -995,16 +930,7 @@ while (!Raylib.WindowShouldClose())
                 var currentPos = fullPath.GetPositionAtTime(pathTotalTime);
                 shotCurrentPathPos = new Vector2((float)currentPos.X, (float)currentPos.Y);
 
-                double remainingDist = targetSpeed * pathTotalTime;
-                var pos = new Point2D(pathStartPos.X, pathStartPos.Y);
-                int wpIdx = 0;
-                while (remainingDist > 0 && wpIdx < waypointsList.Count)
-                {
-                    var tgt = waypointsList[wpIdx];
-                    var dist = (tgt - pos).Length;
-                    if (dist <= remainingDist) { pos = tgt; remainingDist -= dist; wpIdx++; }
-                    else break;
-                }
+                int wpIdx = FindCurrentWaypointIndex(waypointsList, new Point2D(pathStartPos.X, pathStartPos.Y), targetSpeed * pathTotalTime);
                 shotCurrentWaypointIndex = wpIdx;
                 shotPrevWaypoint = wpIdx == 0 ? pathStartPos : waypoints[wpIdx - 1];
                 shotNextWaypoint = wpIdx < waypoints.Count ? waypoints[wpIdx] : waypoints[^1];
@@ -1055,7 +981,7 @@ while (!Raylib.WindowShouldClose())
         }
         else
         {
-            animTargetPos = fireTargetStartPos + targetVelocity * targetSpeed * fireTime;
+            animTargetPos = fireTargetStartPos + (targetVelocity * targetSpeed * fireTime);
         }
 
         currentAnimTargetPos = animTargetPos;
@@ -1073,7 +999,7 @@ while (!Raylib.WindowShouldClose())
             {
                 // Expand circle quickly to target radius
                 float expansionSpeed = circularTargetRadius * 4f; // Expand over ~0.25s
-                circularAnimRadius = Math.Min(circularTargetRadius, circularAnimRadius + expansionSpeed * dt);
+                circularAnimRadius = Math.Min(circularTargetRadius, circularAnimRadius + (expansionSpeed * dt));
 
                 // Check collision - target center within spell radius + hitbox
                 float collisionDist = circularTargetRadius + targetHitbox;
@@ -1135,12 +1061,12 @@ while (!Raylib.WindowShouldClose())
 
                 // Calculate closest point on beam line to target
                 var beamStart = casterPos;
-                var beamEnd = casterPos + skillshotDir * skillshotRange;
+                var beamEnd = casterPos + (skillshotDir * skillshotRange);
                 var targetToStart = animTargetPos - beamStart;
                 var beamVector = beamEnd - beamStart;
                 float beamLengthSq = beamVector.LengthSquared();
                 float t = Math.Clamp(Vector2.Dot(targetToStart, beamVector) / beamLengthSq, 0f, 1f);
-                var closestPoint = beamStart + beamVector * t;
+                var closestPoint = beamStart + (beamVector * t);
                 float distToBeam = Vector2.Distance(animTargetPos, closestPoint);
 
                 if (distToBeam <= collisionDist)
@@ -1419,7 +1345,7 @@ while (!Raylib.WindowShouldClose())
             {
                 // Draw the instant beam from caster to range
                 float beamAlpha = hitscanBeamTimer / HitscanBeamDuration;
-                var beamEnd = casterPos + skillshotDir * skillshotRange;
+                var beamEnd = casterPos + (skillshotDir * skillshotRange);
 
                 // Draw beam glow (wider, faded)
                 float glowWidth = skillshotWidth * 1.5f;
@@ -1441,12 +1367,12 @@ while (!Raylib.WindowShouldClose())
                 // Charging animation before beam fires
                 float delayProgress = fireTime / skillshotDelay;
                 // Pulsing charge effect at caster
-                float pulseRadius = 30 + 20 * (float)Math.Sin(fireTime * 15);
+                float pulseRadius = 30 + (20 * (float)Math.Sin(fireTime * 15));
                 Raylib.DrawCircleV(casterPos, pulseRadius, new Color((byte)255, (byte)100, (byte)100, (byte)(100 * delayProgress)));
                 Raylib.DrawCircleLinesV(casterPos, 40, new Color((byte)255, (byte)50, (byte)50, (byte)(200 * delayProgress)));
 
                 // Show charging beam preview (faint)
-                var previewEnd = casterPos + skillshotDir * skillshotRange;
+                var previewEnd = casterPos + (skillshotDir * skillshotRange);
                 DrawHitscanBeam(casterPos, previewEnd, skillshotWidth * 0.5f, new Color((byte)255, (byte)100, (byte)100, (byte)(30 * delayProgress)));
             }
 
@@ -1525,14 +1451,14 @@ while (!Raylib.WindowShouldClose())
         // Draw velocity arrow only in non-path mode
         if (!pathModeActive && targetVelocity.LengthSquared() > 0)
         {
-            var velEnd = targetPos + Vector2.Normalize(targetVelocity) * 100;
+            var velEnd = targetPos + (Vector2.Normalize(targetVelocity) * 100);
             DrawArrow(targetPos, velEnd, new Color(255, 200, 100, 255));
         }
         // In path mode, draw arrow toward first waypoint
         else if (pathModeActive && waypoints.Count > 0)
         {
             var dirToWp = Vector2.Normalize(waypoints[0] - targetPos);
-            var arrowEnd = targetPos + dirToWp * 80;
+            var arrowEnd = targetPos + (dirToWp * 80);
             DrawArrow(targetPos, arrowEnd, new Color(100, 200, 255, 255));
         }
     }
@@ -1545,7 +1471,7 @@ while (!Raylib.WindowShouldClose())
         var resultColor = hitResult.Contains("HIT") ? Color.Green : Color.Red;
         int hitFontSize = 48;
         int textWidth = Raylib.MeasureText(hitResult, hitFontSize);
-        Raylib.DrawText(hitResult, ScreenWidth / 2 - textWidth / 2, ScreenHeight / 2 - 24, hitFontSize, resultColor);
+        Raylib.DrawText(hitResult, (ScreenWidth / 2) - (textWidth / 2), (ScreenHeight / 2) - 24, hitFontSize, resultColor);
     }
 
     // UI (screen space)
@@ -1562,11 +1488,11 @@ while (!Raylib.WindowShouldClose())
     // Collision info overlay
     if (collisionDisplayTimer > 0)
     {
-        int infoY = ScreenHeight / 2 + 40;
-        Raylib.DrawRectangle(ScreenWidth / 2 - 140, infoY, 280, 60, new Color(0, 0, 0, 200));
-        Raylib.DrawRectangleLines(ScreenWidth / 2 - 140, infoY, 280, 60, Color.Yellow);
-        Raylib.DrawText($"Time: {collisionTime:F3}s", ScreenWidth / 2 - 120, infoY + 10, 18, Color.Yellow);
-        Raylib.DrawText($"Pos: ({collisionPos.X:F0}, {collisionPos.Y:F0})", ScreenWidth / 2 - 120, infoY + 32, 18, Color.LightGray);
+        int infoY = (ScreenHeight / 2) + 40;
+        Raylib.DrawRectangle((ScreenWidth / 2) - 140, infoY, 280, 60, new Color(0, 0, 0, 200));
+        Raylib.DrawRectangleLines((ScreenWidth / 2) - 140, infoY, 280, 60, Color.Yellow);
+        Raylib.DrawText($"Time: {collisionTime:F3}s", (ScreenWidth / 2) - 120, infoY + 10, 18, Color.Yellow);
+        Raylib.DrawText($"Pos: ({collisionPos.X:F0}, {collisionPos.Y:F0})", (ScreenWidth / 2) - 120, infoY + 32, 18, Color.LightGray);
     }
 
     Raylib.EndDrawing();
@@ -1689,6 +1615,36 @@ static void HandleInput(ref Vector2 casterPos, ref Vector2 targetPos, ref Vector
     }
 }
 
+/// <summary>
+/// Walks along a waypoint path from <paramref name="startPosition"/> by
+/// <paramref name="distanceTravelled"/> and returns the index of the waypoint
+/// the target is currently heading toward. Returns <c>waypoints.Count</c>
+/// when the target has completed the entire path.
+/// </summary>
+static int FindCurrentWaypointIndex(List<Point2D> waypoints, Point2D startPosition, double distanceTravelled)
+{
+    double remaining = distanceTravelled;
+    var position = startPosition;
+    int index = 0;
+
+    while (remaining > 0 && index < waypoints.Count)
+    {
+        var segmentLength = (waypoints[index] - position).Length;
+        if (segmentLength <= remaining)
+        {
+            position = waypoints[index];
+            remaining -= segmentLength;
+            index++;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return index;
+}
+
 static void DrawGrid(Camera2D camera)
 {
     int gridSize = 100;
@@ -1711,10 +1667,10 @@ static void DrawSkillshotPreview(Vector2 start, Vector2 end, float width, Color 
     var perp = new Vector2(-dir.Y, dir.X);
     var halfWidth = width / 2;
 
-    var p1 = start + perp * halfWidth;
-    var p2 = start - perp * halfWidth;
-    var p3 = end - perp * halfWidth;
-    var p4 = end + perp * halfWidth;
+    var p1 = start + (perp * halfWidth);
+    var p2 = start - (perp * halfWidth);
+    var p3 = end - (perp * halfWidth);
+    var p4 = end + (perp * halfWidth);
 
     Raylib.DrawTriangle(p1, p2, p3, fillColor);
     Raylib.DrawTriangle(p1, p3, p4, fillColor);
@@ -1728,8 +1684,8 @@ static void DrawArrow(Vector2 start, Vector2 end, Color color)
     Raylib.DrawLineEx(start, end, 4, color);
     var dir = Vector2.Normalize(end - start);
     var perp = new Vector2(-dir.Y, dir.X);
-    var p1 = end - dir * 15 + perp * 8;
-    var p2 = end - dir * 15 - perp * 8;
+    var p1 = end - (dir * 15) + (perp * 8);
+    var p2 = end - (dir * 15) - (perp * 8);
     Raylib.DrawTriangle(end, p1, p2, color);
 }
 
@@ -1739,10 +1695,10 @@ static void DrawHitscanBeam(Vector2 start, Vector2 end, float width, Color color
     var perp = new Vector2(-dir.Y, dir.X);
     var halfWidth = width / 2;
 
-    var p1 = start + perp * halfWidth;
-    var p2 = start - perp * halfWidth;
-    var p3 = end - perp * halfWidth;
-    var p4 = end + perp * halfWidth;
+    var p1 = start + (perp * halfWidth);
+    var p2 = start - (perp * halfWidth);
+    var p3 = end - (perp * halfWidth);
+    var p4 = end + (perp * halfWidth);
 
     Raylib.DrawTriangle(p1, p2, p3, color);
     Raylib.DrawTriangle(p1, p3, p4, color);
@@ -1754,21 +1710,21 @@ static void DrawLinearSkillshot(Vector2 center, Vector2 direction, float width, 
     var halfWidth = width / 2;
     var halfLength = length / 2;
 
-    var front = center + direction * halfLength;
-    var back = center - direction * halfLength;
+    var front = center + (direction * halfLength);
+    var back = center - (direction * halfLength);
 
-    var p1 = front + perp * halfWidth;
-    var p2 = front - perp * halfWidth;
-    var p3 = back - perp * halfWidth;
-    var p4 = back + perp * halfWidth;
+    var p1 = front + (perp * halfWidth);
+    var p2 = front - (perp * halfWidth);
+    var p3 = back - (perp * halfWidth);
+    var p4 = back + (perp * halfWidth);
 
     Raylib.DrawTriangle(p1, p3, p2, color);
     Raylib.DrawTriangle(p1, p4, p3, color);
 
     var tipLength = width * 0.8f;
-    var tip = front + direction * tipLength;
-    var tipLeft = front + perp * halfWidth * 0.3f;
-    var tipRight = front - perp * halfWidth * 0.3f;
+    var tip = front + (direction * tipLength);
+    var tipLeft = front + (perp * halfWidth * 0.3f);
+    var tipRight = front - (perp * halfWidth * 0.3f);
     Raylib.DrawTriangle(tip, tipRight, tipLeft, color);
 }
 
@@ -1778,13 +1734,13 @@ static void DrawLinearSkillshotOutline(Vector2 center, Vector2 direction, float 
     var halfWidth = width / 2;
     var halfLength = length / 2;
 
-    var front = center + direction * halfLength;
-    var back = center - direction * halfLength;
+    var front = center + (direction * halfLength);
+    var back = center - (direction * halfLength);
 
-    var p1 = front + perp * halfWidth;
-    var p2 = front - perp * halfWidth;
-    var p3 = back - perp * halfWidth;
-    var p4 = back + perp * halfWidth;
+    var p1 = front + (perp * halfWidth);
+    var p2 = front - (perp * halfWidth);
+    var p3 = back - (perp * halfWidth);
+    var p4 = back + (perp * halfWidth);
 
     Raylib.DrawLineEx(p1, p2, 2, color);
     Raylib.DrawLineEx(p2, p3, 2, color);
@@ -1792,7 +1748,7 @@ static void DrawLinearSkillshotOutline(Vector2 center, Vector2 direction, float 
     Raylib.DrawLineEx(p4, p1, 2, color);
 
     var tipLength = width * 0.8f;
-    var tip = front + direction * tipLength;
+    var tip = front + (direction * tipLength);
     Raylib.DrawLineEx(p1, tip, 2, color);
     Raylib.DrawLineEx(p2, tip, 2, color);
 }
@@ -1885,7 +1841,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
 
     for (int i = 0; i < timeLabels.Length; i++)
     {
-        var btnRect = new Rectangle(btnX + i * (btnW + 6), btnY, btnW, btnH);
+        var btnRect = new Rectangle(btnX + (i * (btnW + 6)), btnY, btnW, btnH);
         bool isSelected = i == currentTimeIndex;
         bool isHovered = Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), btnRect);
 
@@ -1895,7 +1851,7 @@ static void DrawUI(Font font, PredictionResult? ultimateResult,
         Raylib.DrawRectangleLinesEx(btnRect, 2, isSelected ? Color.White : new Color(100, 100, 120, 255));
 
         var textSize = Raylib.MeasureTextEx(font, timeLabels[i], fontSize, spacing);
-        Raylib.DrawTextEx(font, timeLabels[i], new Vector2(btnX + i * (btnW + 6) + btnW / 2 - textSize.X / 2, btnY + btnH / 2 - textSize.Y / 2), fontSize, spacing,
+        Raylib.DrawTextEx(font, timeLabels[i], new Vector2(btnX + (i * (btnW + 6)) + (btnW / 2) - (textSize.X / 2), btnY + (btnH / 2) - (textSize.Y / 2)), fontSize, spacing,
             isSelected ? Color.Black : Color.LightGray);
     }
 

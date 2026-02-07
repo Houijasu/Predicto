@@ -114,7 +114,7 @@ public sealed class TargetPath
             else
             {
                 // Stop partway to this waypoint
-                position = position + toTarget.Normalize() * remainingDistance;
+                position = position + (toTarget.Normalize() * remainingDistance);
                 remainingDistance = 0;
             }
         }

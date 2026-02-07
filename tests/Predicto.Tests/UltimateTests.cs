@@ -169,7 +169,7 @@ public class UltimateTests
         // The offset should be approximately (effectiveRadius - adaptiveMargin)
         // With adaptive margin based on half spell width, the offset will be smaller
         double yOffset = hit.PredictedTargetPosition.Y - hit.CastPosition.Y;
-        double effectiveRadius = 65 + 70 / 2.0; // 100
+        double effectiveRadius = 65 + (70 / 2.0); // 100
         // Adaptive margin is clamped to max 50% of effectiveRadius = 50
         double maxMargin = effectiveRadius * 0.5;
         double minExpectedOffset = effectiveRadius - maxMargin; // 50
@@ -636,15 +636,15 @@ public class UltimateTests
             var input = new PredictionInput(
                 CasterPosition: new Point2D(0, 0),
                 TargetPosition: new Point2D(
-                    random.NextDouble() * 800 + 100,  // 100-900
-                    random.NextDouble() * 800 - 400), // -400 to 400
+                    (random.NextDouble() * 800) + 100,  // 100-900
+                    (random.NextDouble() * 800) - 400), // -400 to 400
                 TargetVelocity: new Vector2D(
-                    random.NextDouble() * 600 - 300,  // -300 to 300
-                    random.NextDouble() * 600 - 300),
+                    (random.NextDouble() * 600) - 300,  // -300 to 300
+                    (random.NextDouble() * 600) - 300),
                 Skillshot: new LinearSkillshot(
-                    Speed: 1200 + random.NextDouble() * 600,  // 1200-1800
+                    Speed: 1200 + (random.NextDouble() * 600),  // 1200-1800
                     Range: 1000,
-                    Width: 50 + random.NextDouble() * 70,     // 50-120
+                    Width: 50 + (random.NextDouble() * 70),     // 50-120
                     Delay: random.NextDouble() * 0.3),        // 0-0.3
                 TargetHitboxRadius: 65.0);
             inputs.Add(input);
@@ -693,7 +693,7 @@ public class UltimateTests
         {
             easyInputs.Add(new PredictionInput(
                 CasterPosition: new Point2D(0, 0),
-                TargetPosition: new Point2D(150 + i * 0.1, 0),
+                TargetPosition: new Point2D(150 + (i * 0.1), 0),
                 TargetVelocity: new Vector2D(50, 0),
                 Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0),
                 TargetHitboxRadius: 65.0));
@@ -906,10 +906,10 @@ public class UltimateTests
         for (int i = 0; i < 20; i++)
         {
             targets[i] = new TargetCandidate(
-                new Point2D(200 + random.NextDouble() * 700, -300 + random.NextDouble() * 600),
-                new Vector2D(-200 + random.NextDouble() * 400, -200 + random.NextDouble() * 400),
+                new Point2D(200 + (random.NextDouble() * 700), -300 + (random.NextDouble() * 600)),
+                new Vector2D(-200 + (random.NextDouble() * 400), -200 + (random.NextDouble() * 400)),
                 HitboxRadius: 65,
-                PriorityWeight: 0.5 + random.NextDouble() * 2.0,
+                PriorityWeight: 0.5 + (random.NextDouble() * 2.0),
                 Tag: $"target_{i}");
         }
 
@@ -1263,6 +1263,203 @@ public class UltimateTests
         double behindness = aimOffset.DotProduct(moveDir.Negate());
 
         Assert.True(behindness > 0, "Aim point should be in behind hemisphere");
+    }
+
+    #endregion
+
+    #region MinimizeTime Direct Path Tests
+
+    [Fact]
+    public void MinimizeTime_ReturnsEarlierInterceptTime_ThanDefault()
+    {
+        var path = TargetPath.FromDestination(
+            currentPosition: new Point2D(400, 0),
+            destination: new Point2D(800, 0),
+            speed: 350);
+
+        var baseInput = PredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            targetHitboxRadius: 65);
+
+        var defaultResult = _prediction.Predict(baseInput);
+        var minimizeResult = _prediction.Predict(baseInput with { MinimizeTime = true });
+
+        Assert.IsType<PredictionResult.Hit>(defaultResult);
+        Assert.IsType<PredictionResult.Hit>(minimizeResult);
+
+        var defaultHit = (PredictionResult.Hit)defaultResult;
+        var minimizeHit = (PredictionResult.Hit)minimizeResult;
+
+        Assert.True(minimizeHit.InterceptTime <= defaultHit.InterceptTime + 0.01,
+            $"MinimizeTime ({minimizeHit.InterceptTime:F4}s) should be <= default ({defaultHit.InterceptTime:F4}s)");
+    }
+
+    [Fact]
+    public void MinimizeTime_StationaryTarget_ReturnsHit()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            MinimizeTime: true);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+        Assert.Equal(500, hit.CastPosition.X, precision: 1);
+    }
+
+    [Fact]
+    public void MinimizeTime_PerpendicularTarget_ReturnsHit()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 350),
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            MinimizeTime: true);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+        Assert.True(hit.PredictedTargetPosition.Y > 0,
+            "Predicted target should have moved in Y direction");
+    }
+
+    [Fact]
+    public void MinimizeTime_TargetMovingAway_ReturnsHit()
+    {
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(400, 0),
+            TargetVelocity: new Vector2D(300, 0),
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1200, Width: 70, Delay: 0.25),
+            MinimizeTime: true);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+        Assert.True(hit.PredictedTargetPosition.X > 400,
+            "Target moving away should be predicted further along X");
+    }
+
+    #endregion
+
+    #region Reactive Prediction Tests
+
+    [Fact]
+    public void Reactive_StationaryTarget_ReturnsHit()
+    {
+#pragma warning disable CS0618
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(500, 0),
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            Reactive: true);
+
+        var result = _prediction.Predict(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+#pragma warning restore CS0618
+    }
+
+    [Fact]
+    public void Reactive_OutOfRangeTarget_ReturnsAppropriateResult()
+    {
+#pragma warning disable CS0618
+        var input = new PredictionInput(
+            CasterPosition: new Point2D(0, 0),
+            TargetPosition: new Point2D(2000, 0),
+            TargetVelocity: new Vector2D(0, 0),
+            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
+            Reactive: true);
+
+        var result = _prediction.Predict(input);
+
+        Assert.True(result is PredictionResult.OutOfRange or PredictionResult.Hit,
+            "Reactive out-of-range should return OutOfRange or a long-range Hit");
+#pragma warning restore CS0618
+    }
+
+    #endregion
+
+    #region Circular Skillshot Path Prediction Tests
+
+    [Fact]
+    public void PredictCircular_WithMultiWaypointPath_ReturnsHit()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(400, 300), new Point2D(600, 300) },
+            currentPosition: new Point2D(400, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var input = CircularPredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new CircularSkillshot(Radius: 200, Range: 1100, Delay: 0.5),
+            targetHitboxRadius: 65);
+
+        var result = _prediction.PredictCircular(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void PredictCircular_TargetNearPathEnd_ReturnsHit()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(450, 0) },
+            currentPosition: new Point2D(400, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var input = CircularPredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new CircularSkillshot(Radius: 200, Range: 900, Delay: 0.5),
+            targetHitboxRadius: 65);
+
+        var result = _prediction.PredictCircular(input);
+
+        Assert.IsType<PredictionResult.Hit>(result);
+        var hit = (PredictionResult.Hit)result;
+        Assert.True(hit.PredictedTargetPosition.X >= 400,
+            "Target near path end should be predicted at or past start position");
+    }
+
+    [Fact]
+    public void PredictCircular_OutOfRangeTarget_ReturnsOutOfRange()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(3000, 0) },
+            currentPosition: new Point2D(2500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var input = CircularPredictionInput.WithPath(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshot: new CircularSkillshot(Radius: 200, Range: 900, Delay: 0.5),
+            targetHitboxRadius: 65);
+
+        var result = _prediction.PredictCircular(input);
+
+        Assert.IsType<PredictionResult.OutOfRange>(result);
     }
 
     #endregion

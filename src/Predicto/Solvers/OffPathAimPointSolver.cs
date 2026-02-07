@@ -14,7 +14,7 @@ public static class OffPathAimPointSolver
     /// <summary>
     /// Calculates the optimal aim point that is OFF the target's path,
     /// positioned so the skillshot clips the trailing edge of the target's hitbox.
-    /// 
+    ///
     /// This solves the geometric problem: find point A such that:
     /// 1. A is at distance effectiveRadius from predicted position P
     /// 2. A is in the "behind" hemisphere (opposite to target velocity)
@@ -49,7 +49,7 @@ public static class OffPathAimPointSolver
             return predictedPosition;
 
         Vector2D behindDir = targetVelocity.Normalize().Negate();
-        return predictedPosition + behindDir * effectiveRadius;
+        return predictedPosition + (behindDir * effectiveRadius);
     }
 
     /// <summary>
@@ -80,7 +80,7 @@ public static class OffPathAimPointSolver
 
         // Calculate tangent angle: sin(θ) = R / d
         double sinTheta = effectiveRadius / distanceToTarget;
-        double cosTheta = Math.Sqrt(1 - sinTheta * sinTheta);
+        double cosTheta = Math.Sqrt(1 - (sinTheta * sinTheta));
 
         // Perpendicular to line of fire (two options: left and right)
         Vector2D perpLeft = new Vector2D(-toTargetNorm.Y, toTargetNorm.X);
@@ -94,7 +94,7 @@ public static class OffPathAimPointSolver
         // Calculate tangent point
         // The tangent point is at: P + perp * R (on the circle)
         // But we need to verify it's reachable from C
-        Point2D tangentPoint = predictedPosition + perp * effectiveRadius;
+        Point2D tangentPoint = predictedPosition + (perp * effectiveRadius);
 
         // Verify the tangent point is in the "behind" hemisphere
         Vector2D tangentOffset = tangentPoint - predictedPosition;
@@ -107,10 +107,10 @@ public static class OffPathAimPointSolver
 
         // If tangent point is not behind enough, blend toward direct behind
         // This handles edge cases where caster is nearly perpendicular to target path
-        Point2D directBehind = predictedPosition + behindDir * effectiveRadius;
+        Point2D directBehind = predictedPosition + (behindDir * effectiveRadius);
 
         // Blend based on how "behind" the tangent point is
-        double blendFactor = Math.Max(0, behindness / effectiveRadius + 0.5);
+        double blendFactor = Math.Max(0, (behindness / effectiveRadius) + 0.5);
         return Lerp(directBehind, tangentPoint, blendFactor);
     }
 
@@ -145,7 +145,7 @@ public static class OffPathAimPointSolver
         }
 
         // Scale to effective radius
-        return predictedPosition + offset * (effectiveRadius / offsetLength);
+        return predictedPosition + (offset * (effectiveRadius / offsetLength));
     }
 
     /// <summary>
@@ -162,7 +162,7 @@ public static class OffPathAimPointSolver
         double skillshotRange,
         BehindEdgeStrategy strategy = BehindEdgeStrategy.Tangent)
     {
-        double effectiveRadius = targetRadius + skillshotWidth / 2;
+        double effectiveRadius = targetRadius + (skillshotWidth / 2);
 
         // Iterative solution: find intercept time, then calculate off-path aim point
         // The challenge: aim point affects travel time, which affects intercept time
@@ -194,11 +194,11 @@ public static class OffPathAimPointSolver
             var v = path.GetVelocityAtTime(t);
             var ap = CalculateBehindEdgeAimPoint(casterPosition, pos, v, effectiveRadius, strategy);
             double dist = (ap - casterPosition).Length;
-            return (castDelay + dist / skillshotSpeed) - t;
+            return (castDelay + (dist / skillshotSpeed)) - t;
         };
 
         // Bracket the search: [0, maxTime]
-        double maxTime = castDelay + skillshotRange / skillshotSpeed + path.GetRemainingPathTime();
+        double maxTime = castDelay + (skillshotRange / skillshotSpeed) + path.GetRemainingPathTime();
         if (Brent.TryFindRoot(timeResidual, 0, maxTime, Constants.Epsilon, 100, out double refinedTime))
         {
             interceptTime = refinedTime;
@@ -236,14 +236,14 @@ public static class OffPathAimPointSolver
     private static Point2D Lerp(Point2D a, Point2D b, double t)
     {
         return new Point2D(
-            a.X + (b.X - a.X) * t,
-            a.Y + (b.Y - a.Y) * t);
+            a.X + ((b.X - a.X) * t),
+            a.Y + ((b.Y - a.Y) * t));
     }
 
     /// <summary>
     /// Calculates the TRUE intercept time - when the skillshot's edge first touches the target's hitbox.
     /// This solves the geometric collision problem between a moving LINE (skillshot path) and moving CIRCLE (target).
-    /// 
+    ///
     /// For off-path aim points, the skillshot travels along a line toward the aim point.
     /// Collision occurs when the target's hitbox touches this line (perpendicular distance = collision radius).
     /// </summary>
@@ -267,7 +267,7 @@ public static class OffPathAimPointSolver
         double skillshotWidth)
     {
         // Combined collision radius
-        double collisionRadius = targetRadius + skillshotWidth / 2;
+        double collisionRadius = targetRadius + (skillshotWidth / 2);
 
         // Direction from caster to aim point
         Vector2D toAim = aimPoint - casterPosition;
@@ -321,7 +321,7 @@ public static class OffPathAimPointSolver
 
                 // Projectile position along line at time t: speed * (t - delay)
                 // Target position along line at time t: forwardDist + forwardVelocity * t
-                // 
+                //
                 // Collision when projectile catches up to target (within collision radius):
                 // speed * (t - delay) >= forwardDist + forwardVelocity * t - collisionRadius
                 // (speed - forwardVelocity) * t >= forwardDist - collisionRadius + speed * delay
@@ -329,7 +329,7 @@ public static class OffPathAimPointSolver
                 double relativeSpeed = skillshotSpeed - forwardVelocity;
                 if (relativeSpeed > Constants.Epsilon)
                 {
-                    double tCollision = (forwardDist - collisionRadius + skillshotSpeed * castDelay) / relativeSpeed;
+                    double tCollision = (forwardDist - collisionRadius + (skillshotSpeed * castDelay)) / relativeSpeed;
                     if (tCollision >= castDelay)
                         return tCollision;
                 }
@@ -356,7 +356,7 @@ public static class OffPathAimPointSolver
             double projectileForwardPos = skillshotSpeed * (t - castDelay);
 
             // Where is the target (along the shot direction) at time t?
-            Vector2D targetAtT = (targetPosition - casterPosition) + targetVelocity * t;
+            Vector2D targetAtT = (targetPosition - casterPosition) + (targetVelocity * t);
             double targetForwardPos = targetAtT.DotProduct(shotDirection);
 
             // Projectile must have reached the target's position (within collision radius)

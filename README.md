@@ -12,7 +12,7 @@ A high-precision ballistic prediction engine for skillshot interception in game 
 - **Linear & Circular Skillshots**: Full support for both projectile-based and ground-targeted abilities.
 - **Multi-Target Priority Selection**: Rank and select optimal targets in team fights based on confidence, priority, and range.
 - **Multi-Path Prediction**: Global path root-finder handles complex movement patterns with multiple waypoints.
-- **Performance Optimized**: ~8 microseconds per prediction, zero GC pressure with stack-allocated structs.
+- **Performance Optimized**: ~8 microseconds per prediction, minimal GC pressure with stack-allocated structs for inputs and value-type intermediates.
 
 ## How It Works
 
@@ -62,25 +62,31 @@ The engine leverages **MathNet.Numerics** and **MathNet.Spatial** for high-preci
 src/
   Predicto/                    # Core prediction library
     Models/
-      LinearSkillshot.cs       # Linear skillshot parameters
-      CircularSkillshot.cs     # Circular skillshot parameters (with presets)
+      LinearSkillshot.cs       # Linear skillshot parameters (with 20+ presets)
+      CircularSkillshot.cs     # Circular skillshot parameters (with 20+ presets)
       PredictionInput.cs       # Input configuration
       PredictionResult.cs      # Result types (Hit/OutOfRange/Unreachable)
       TargetPath.cs            # Multi-waypoint path handling
     Solvers/
-      InterceptSolver.cs       # Mathematical solving engine (~2800 lines)
+      InterceptSolver.cs       # Mathematical solving engine
+      OffPathAimPointSolver.cs # Off-path aim point strategies (DirectBehind/Tangent/Adaptive)
+    Physics/
+      DangerFields.cs          # Danger field potentials (experimental)
+      FastMath.cs              # Inlined math utilities (Lorentzian, etc.)
+      StructOdeSolver.cs       # Zero-allocation ODE integrators (RK4/Euler/Verlet)
     Ultimate.cs                # Main prediction API
     IPrediction.cs             # Prediction interface
-    Constants.cs               # Game constants
+    Constants.cs               # Game constants and helper methods
   
   Predicto.Simulation/         # Visual testing simulation
-    Program.cs                 # Raylib-based visualization
+    Program.cs                 # Raylib-based visualization (with --bench CLI mode)
 
 tests/
-  Predicto.Tests/              # Unit tests (178 tests)
+  Predicto.Tests/              # Unit tests (185 tests)
     InterceptSolverTests.cs    # Solver unit tests
     UltimateTests.cs           # Integration tests
     EdgeCaseRegressionTests.cs # Regression tests for bug fixes
+    OffPathAimPointSolverTests.cs # Off-path aim strategy tests
 ```
 
 ## Usage
@@ -271,6 +277,7 @@ Controls:
 - **Delete/Backspace**: Clear waypoints
 - **Tab**: Cycle through presets
 - **` (Backtick)**: Toggle Linear/Circular mode
+- **M**: Cycle aim strategies (DirectBehind/Tangent/Adaptive/Gagong)
 - **Q/W**: Decrease/Increase target speed
 - **E/R**: Decrease/Increase projectile speed
 - **1-5**: Set time multiplier
@@ -290,7 +297,7 @@ This allows you to see the difference between blended and pure trailing-edge aim
 dotnet test
 ```
 
-Current test coverage: **144 tests** covering:
+Current test coverage: **185 tests** covering:
 - Basic interception scenarios
 - Edge cases (boundary conditions, numerical precision)
 - Multi-target priority selection
@@ -304,7 +311,7 @@ Current test coverage: **144 tests** covering:
 |--------|-------|
 | Average prediction time | ~8 μs |
 | 1000 predictions | ~8 ms |
-| Memory allocations | Zero (stack-allocated structs) |
+| Memory allocations | Minimal (inputs are stack-allocated structs; results are heap-allocated records) |
 | Easy cases (close, slow) | ~4 μs |
 | Hard cases (far, fast) | ~12 μs |
 
@@ -336,6 +343,7 @@ Main prediction engine implementing `IPrediction`.
 |--------|-------------|
 | `Predict(PredictionInput)` | Predicts intercept for linear skillshot |
 | `PredictCircular(CircularPredictionInput)` | Predicts intercept for circular skillshot |
+| `PredictReactive(PredictionInput)` | **[Experimental/Obsolete]** Physics-based dodge prediction |
 | `RankTargets(casterPos, skillshot, targets)` | Ranks multiple targets by hit probability |
 | `RankTargetsCircular(casterPos, skillshot, targets)` | Ranks targets for circular skillshot |
 | `GetBestTarget(casterPos, skillshot, targets)` | Gets single best hittable target |
@@ -353,11 +361,22 @@ Low-level mathematical solver using MathNet.
 | `SolveHitscanBehindTarget` | Instant beam interception |
 | `CalculateConfidence` | Prediction reliability score |
 
+### `OffPathAimPointSolver` Class
+
+Calculates off-path aim points using behind-target strategies.
+
+| Method | Description |
+|--------|-------------|
+| `SolveOffPathIntercept` | Iterative CCD refinement using Brent's method |
+| `CalculateDirectBehindPoint` | Aim behind target relative to movement direction |
+| `CalculateTangentPoint` | Aim at tangent of hitbox from caster's perspective |
+| `CalculateAdaptivePoint` | Blend of DirectBehind and Tangent (default) |
+
 ### Model Types
 
 ```csharp
 // Configuration strategy for behind-edge aim
-enum BehindEdgeStrategy { DirectBehind, Tangent, Adaptive }
+enum BehindEdgeStrategy { DirectBehind, Tangent, Adaptive, Gagong }
 
 // Prediction input parameters
 PredictionInput(CasterPosition, TargetPosition, TargetVelocity, Skillshot, 

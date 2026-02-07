@@ -3,7 +3,7 @@ namespace Predicto;
 /// <summary>
 /// Constants used throughout the prediction engine.
 /// Based on League of Legends game mechanics.
-/// 
+///
 /// DESIGN RULE: Only allowed math literals are: epsilon, 0.5, 1, 2
 /// Game data values (tick rate, hitbox radius, etc.) are exempt as they are facts, not tuning parameters.
 /// </summary>
@@ -116,6 +116,38 @@ public static class Constants
     /// </summary>
     public const double PathEndBlendThreshold = 0.5;
 
+    // === Hitscan Confidence ===
+
+    /// <summary>
+    /// Confidence multiplier applied to hitscan predictions.
+    /// Hitscan is more reliable due to instant travel, so confidence gets a small boost.
+    /// </summary>
+    public const double HitscanConfidenceBoost = 1.1;
+
+    // === Solver Tuning Constants ===
+
+    /// <summary>
+    /// Maximum array length for stack allocation via stackalloc.
+    /// Above this threshold, heap allocation is used instead.
+    /// </summary>
+    public const int StackallocThreshold = 256;
+
+    /// <summary>
+    /// Number of time steps in the Gagong strategy coarse grid search.
+    /// </summary>
+    public const int GagongTimeSteps = 20;
+
+    /// <summary>
+    /// Number of angle steps in the Gagong strategy coarse grid search.
+    /// Covers the behind hemisphere [-π/2, +π/2] relative to movement direction.
+    /// </summary>
+    public const int GagongAngleSteps = 12;
+
+    /// <summary>
+    /// Maximum iterations for Golden Section Search refinement.
+    /// </summary>
+    public const int GoldenSectionMaxIterations = 20;
+
     // === Helper Methods ===
 
     /// <summary>
@@ -143,9 +175,9 @@ public static class Constants
     /// <summary>
     /// Calculate reaction time factor for confidence adjustment.
     /// Shorter flight times than reaction time = higher hit probability.
-    /// 
+    ///
     /// Formula: factor = clamp(1 - (flightTime - reactionTime) / reactionTime, 0.5, 1.0)
-    /// 
+    ///
     /// - Flight time ≤ reaction time: factor = 1.0 (target can't react)
     /// - Flight time = 2x reaction time: factor = 0.5 (target has time to dodge)
     /// - Flight time ≥ 2x reaction time: factor = 0.5 (minimum confidence)
@@ -164,7 +196,7 @@ public static class Constants
 
         // Linear decay from 1.0 to 0.5 as flight time increases
         double excessTime = flightTime - reactionTime;
-        double factor = 1.0 - excessTime / reactionTime * 0.5;
+        double factor = 1.0 - (excessTime / reactionTime * 0.5);
 
         return Math.Max(0.5, factor);
     }
@@ -173,7 +205,7 @@ public static class Constants
     /// Hermite interpolation (smoothstep) for smooth transitions.
     /// Returns 0 when x ≤ edge0, 1 when x ≥ edge1, and smoothly interpolates between.
     /// The result has zero first derivative at both edges (C1 continuous).
-    /// 
+    ///
     /// Formula: t² * (3 - 2t) where t = clamp((x - edge0) / (edge1 - edge0), 0, 1)
     /// </summary>
     /// <param name="edge0">Lower edge of the transition</param>
@@ -186,7 +218,7 @@ public static class Constants
             return x < edge0 ? 0.0 : 1.0;
 
         double t = Math.Clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
+        return t * t * (3.0 - (2.0 * t));
     }
 
     #region Physics Simulation Constants (Least Action Principle)

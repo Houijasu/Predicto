@@ -205,11 +205,11 @@ public class EdgeCaseRegressionTests
 
         // Verify the solution is valid - separation should be less than effectiveRadius
         var (aimPoint, _, interceptTime) = result.Value;
-        double effectiveRadius = 0.5 + 0.5 / 2.0; // 0.75
+        double effectiveRadius = 0.5 + (0.5 / 2.0); // 0.75
 
         double travelDist = (aimPoint - casterPos).Length;
         double arrivalTime = travelDist / 1000.0;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         Assert.True(separation < effectiveRadius,
@@ -230,7 +230,7 @@ public class EdgeCaseRegressionTests
         var targetVel = new Vector2D(0, 300);
         double hitbox = 65;
         double width = 70;
-        double effectiveRadius = hitbox + width / 2; // 100
+        double effectiveRadius = hitbox + (width / 2); // 100
 
         var result = InterceptSolver.SolveBehindTargetWithFullRefinement(
             casterPos, targetPos, targetVel,
@@ -246,7 +246,7 @@ public class EdgeCaseRegressionTests
         var (aimPoint, _, _) = result.Value;
         double travelDist = (aimPoint - casterPos).Length;
         double arrivalTime = travelDist / 1500.0;
-        var targetAtArrival = targetPos + targetVel * arrivalTime;
+        var targetAtArrival = targetPos + (targetVel * arrivalTime);
         double separation = (aimPoint - targetAtArrival).Length;
 
         // Expected separation = effectiveRadius - margin = 100 - 1 = 99
@@ -365,7 +365,7 @@ public class EdgeCaseRegressionTests
         Assert.NotNull(result);
         var (_, _, _, effectiveRadius) = result.Value;
 
-        double expectedMax = hitbox + width / 2;
+        double expectedMax = hitbox + (width / 2);
         Assert.True(effectiveRadius <= expectedMax + 1e-9,
             $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
     }
@@ -396,7 +396,7 @@ public class EdgeCaseRegressionTests
         Assert.NotNull(result);
         var (_, effectiveRadius) = result.Value;
 
-        double expectedMax = hitbox + width / 2;
+        double expectedMax = hitbox + (width / 2);
         Assert.True(effectiveRadius <= expectedMax + 1e-9,
             $"Effective radius ({effectiveRadius}) must be <= hitbox + width/2 ({expectedMax})");
     }
@@ -507,7 +507,7 @@ public class EdgeCaseRegressionTests
 
         // Verify time-travel consistency
         double travelDist = (aimPoint - casterPos).Length;
-        double arrivalTime = 0.5 + travelDist / 3000.0;
+        double arrivalTime = 0.5 + (travelDist / 3000.0);
 
         Assert.Equal(interceptTime, arrivalTime, precision: 9);
     }
@@ -1133,7 +1133,7 @@ public class EdgeCaseRegressionTests
         // Verify the solution is actually correct by checking residual
         var D = new Vector2D(targetPos.X, targetPos.Y);
         double t = result.Value;
-        var futureTarget = D + targetVel * t;
+        var futureTarget = D + (targetVel * t);
         double distance = futureTarget.Length;
         double travelDistance = 2000 * (t - 0.5);
 
@@ -1199,7 +1199,7 @@ public class EdgeCaseRegressionTests
         // Verify the intercept is valid
         var D = new Vector2D(targetPos.X, targetPos.Y);
         double t = result.Value;
-        var futureTarget = D + targetVel * t;
+        var futureTarget = D + (targetVel * t);
         double distance = futureTarget.Length;
         double travelDistance = 1800 * (t - 0.15);
 

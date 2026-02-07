@@ -476,4 +476,126 @@ public class OffPathAimPointSolverTests
     }
 
     #endregion
+
+    #region SolveOffPathIntercept Tests
+
+    [Fact]
+    public void SolveOffPathIntercept_DirectBehind_ReachablePath_ReturnsNonNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = OffPathAimPointSolver.SolveOffPathIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            strategy: BehindEdgeStrategy.DirectBehind);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void SolveOffPathIntercept_Tangent_ReachablePath_ReturnsNonNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = OffPathAimPointSolver.SolveOffPathIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            strategy: BehindEdgeStrategy.Tangent);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void SolveOffPathIntercept_Adaptive_ReachablePath_ReturnsNonNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(500, 500) },
+            currentPosition: new Point2D(500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = OffPathAimPointSolver.SolveOffPathIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            strategy: BehindEdgeStrategy.Adaptive);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0);
+    }
+
+    [Fact]
+    public void SolveOffPathIntercept_OutOfRange_ReturnsNull()
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(3000, 0) },
+            currentPosition: new Point2D(2500, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = OffPathAimPointSolver.SolveOffPathIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 800,
+            strategy: BehindEdgeStrategy.Tangent);
+
+        Assert.Null(result);
+    }
+
+    [Theory]
+    [InlineData(BehindEdgeStrategy.DirectBehind)]
+    [InlineData(BehindEdgeStrategy.Tangent)]
+    [InlineData(BehindEdgeStrategy.Adaptive)]
+    public void SolveOffPathIntercept_InterceptTimeIsPositive_WhenNonNull(BehindEdgeStrategy strategy)
+    {
+        var path = new TargetPath(
+            waypoints: new[] { new Point2D(600, 300) },
+            currentPosition: new Point2D(400, 0),
+            currentWaypointIndex: 0,
+            speed: 350);
+
+        var result = OffPathAimPointSolver.SolveOffPathIntercept(
+            casterPosition: new Point2D(0, 0),
+            path: path,
+            skillshotSpeed: 1500,
+            castDelay: 0.25,
+            targetRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 1000,
+            strategy: strategy);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0,
+            $"Intercept time should be positive for {strategy}, got {result.Value.InterceptTime}");
+    }
+
+    #endregion
 }

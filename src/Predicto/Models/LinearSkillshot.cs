@@ -23,11 +23,17 @@ public readonly record struct LinearSkillshot(
     private const double HitscanSpeedThreshold = 1_000_000;
 
     /// <summary>
-    /// Returns true if this skillshot is a hitscan/instant beam (Speed >= threshold or MaxValue).
+    /// Sentinel speed value for hitscan skillshots (instant beams like Lux R, Xerath Q).
+    /// Use this when defining hitscan presets instead of raw <see cref="double.MaxValue"/>.
+    /// </summary>
+    public const double HitscanSpeed = double.MaxValue;
+
+    /// <summary>
+    /// Returns true if this skillshot is a hitscan/instant beam (Speed >= threshold).
     /// Hitscan skillshots fire instantly after cast delay with no travel time.
     /// Examples: Lux R, Xerath Q.
     /// </summary>
-    public bool IsHitscan => Speed >= HitscanSpeedThreshold || double.IsPositiveInfinity(Speed);
+    public bool IsHitscan => Speed >= HitscanSpeedThreshold;
 
     /// <summary>
     /// Creates a LinearSkillshot with common defaults.
@@ -123,7 +129,7 @@ public readonly record struct LinearSkillshot(
     /// Speed: Instant (fires after charge), Range: 750-1400, Width: 100, Delay: 0.5-1.5s (charge time)
     /// Note: Range increases with charge time. Using 1200 range average.
     /// </summary>
-    public static LinearSkillshot XerathQ => new(Speed: double.MaxValue, Range: 1200, Width: 100, Delay: 0.5);
+    public static LinearSkillshot XerathQ => new(Speed: HitscanSpeed, Range: 1200, Width: 100, Delay: 0.5);
 
     /// <summary>
     /// Varus Q - Piercing Arrow
@@ -190,7 +196,7 @@ public readonly record struct LinearSkillshot(
     /// Speed: Instant, Range: 3400, Width: 100, Delay: 1.0s
     /// Note: Fires after 1s charge animation.
     /// </summary>
-    public static LinearSkillshot LuxR => new(Speed: double.MaxValue, Range: 3400, Width: 100, Delay: 1.0);
+    public static LinearSkillshot LuxR => new(Speed: HitscanSpeed, Range: 3400, Width: 100, Delay: 1.0);
 
     /// <summary>
     /// Senna R - Dawning Shadow

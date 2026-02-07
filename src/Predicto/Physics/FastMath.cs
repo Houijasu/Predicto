@@ -17,7 +17,7 @@ public static class FastMath
     /// <returns>Value in range (0, 1]</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static double LorentzianFalloff(double x)
-        => 1.0 / (1.0 + x * x);
+        => 1.0 / (1.0 + (x * x));
 
     /// <summary>
     /// Fast approximation of 1/(1 + x²/σ²) with configurable width.
@@ -29,7 +29,7 @@ public static class FastMath
     public static double LorentzianFalloff(double x, double sigma)
     {
         double normalized = x / sigma;
-        return 1.0 / (1.0 + normalized * normalized);
+        return 1.0 / (1.0 + (normalized * normalized));
     }
 
     /// <summary>
@@ -60,7 +60,7 @@ public static class FastMath
 
         // Cross product gives perpendicular distance (2D cross product = scalar)
         // cross = dx * dirY - dy * dirX
-        return dx * lineDirection.Y - dy * lineDirection.X;
+        return (dx * lineDirection.Y) - (dy * lineDirection.X);
     }
 
     /// <summary>
@@ -85,7 +85,7 @@ public static class FastMath
         double dy = point.Y - lineOrigin.Y;
 
         // Dot product with normalized direction gives projection length
-        return dx * lineDirection.X + dy * lineDirection.Y;
+        return (dx * lineDirection.X) + (dy * lineDirection.Y);
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ public static class FastMath
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void ClampMagnitude(double x, double y, double maxMagnitude, out double outX, out double outY)
     {
-        double magnitudeSq = x * x + y * y;
+        double magnitudeSq = (x * x) + (y * y);
         double maxSq = maxMagnitude * maxMagnitude;
 
         if (magnitudeSq <= maxSq)
@@ -140,7 +140,7 @@ public static class FastMath
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Normalize(double x, double y, out double outX, out double outY)
     {
-        double magnitudeSq = x * x + y * y;
+        double magnitudeSq = (x * x) + (y * y);
 
         if (magnitudeSq < Constants.Epsilon * Constants.Epsilon)
         {
@@ -159,7 +159,7 @@ public static class FastMath
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static double Lerp(double a, double b, double t)
-        => a + (b - a) * t;
+        => a + ((b - a) * t);
 
     /// <summary>
     /// Computes the gradient of the Lorentzian potential field.
@@ -179,8 +179,8 @@ public static class FastMath
         double amplitude, double sigmaSq,
         out double gradX, out double gradY)
     {
-        double rSq = dx * dx + dy * dy;
-        double denom = 1.0 + rSq / sigmaSq;
+        double rSq = (dx * dx) + (dy * dy);
+        double denom = 1.0 + (rSq / sigmaSq);
         double denomSq = denom * denom;
 
         // Gradient magnitude factor: -2A / (σ² * denom²)

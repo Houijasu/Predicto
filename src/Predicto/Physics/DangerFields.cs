@@ -105,7 +105,7 @@ public readonly struct LinearDangerField : IDangerField
     {
         double flightTime = Math.Max(0, time - Delay);
         double distance = Math.Min(Speed * flightTime, Range);
-        return Origin + Direction * distance;
+        return Origin + (Direction * distance);
     }
 
     /// <summary>
@@ -184,7 +184,7 @@ public readonly struct LinearDangerField : IDangerField
         }
 
         // Perpendicular component (direction away from line)
-        var perp = displacement - Direction * alongPath;
+        var perp = displacement - (Direction * alongPath);
         double perpDistSq = perp.DotProduct(perp);
 
         // Gradient of Lorentzian: d/dr [A/(1 + r²/σ²)] = -2A*r / (σ² * (1 + r²/σ²)²)
@@ -281,7 +281,7 @@ public readonly struct CircularDangerField : IDangerField
             return 0;
 
         // Ramp up danger as detonation approaches
-        double progress = 1.0 - timeUntilDetonation / AnticipationWindow;
+        double progress = 1.0 - (timeUntilDetonation / AnticipationWindow);
         return progress * progress; // Quadratic ramp
     }
 

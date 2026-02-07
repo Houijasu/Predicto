@@ -69,7 +69,7 @@ public struct ParticleState
     public readonly double Speed
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => Math.Sqrt(Vx * Vx + Vy * Vy);
+        get => Math.Sqrt((Vx * Vx) + (Vy * Vy));
     }
 }
 
@@ -142,11 +142,11 @@ public static class StructOdeSolver
 
         // k2 = f(t + dt/2, y + k1*dt/2)
         var state2 = new ParticleState(
-            state.X + k1x * dt * 0.5,
-            state.Y + k1y * dt * 0.5,
-            state.Vx + k1vx * dt * 0.5,
-            state.Vy + k1vy * dt * 0.5);
-        acceleration(in state2, time + dt * 0.5, out double ax2, out double ay2);
+            state.X + (k1x * dt * 0.5),
+            state.Y + (k1y * dt * 0.5),
+            state.Vx + (k1vx * dt * 0.5),
+            state.Vy + (k1vy * dt * 0.5));
+        acceleration(in state2, time + (dt * 0.5), out double ax2, out double ay2);
         double k2x = state2.Vx;
         double k2y = state2.Vy;
         double k2vx = ax2;
@@ -154,11 +154,11 @@ public static class StructOdeSolver
 
         // k3 = f(t + dt/2, y + k2*dt/2)
         var state3 = new ParticleState(
-            state.X + k2x * dt * 0.5,
-            state.Y + k2y * dt * 0.5,
-            state.Vx + k2vx * dt * 0.5,
-            state.Vy + k2vy * dt * 0.5);
-        acceleration(in state3, time + dt * 0.5, out double ax3, out double ay3);
+            state.X + (k2x * dt * 0.5),
+            state.Y + (k2y * dt * 0.5),
+            state.Vx + (k2vx * dt * 0.5),
+            state.Vy + (k2vy * dt * 0.5));
+        acceleration(in state3, time + (dt * 0.5), out double ax3, out double ay3);
         double k3x = state3.Vx;
         double k3y = state3.Vy;
         double k3vx = ax3;
@@ -166,10 +166,10 @@ public static class StructOdeSolver
 
         // k4 = f(t + dt, y + k3*dt)
         var state4 = new ParticleState(
-            state.X + k3x * dt,
-            state.Y + k3y * dt,
-            state.Vx + k3vx * dt,
-            state.Vy + k3vy * dt);
+            state.X + (k3x * dt),
+            state.Y + (k3y * dt),
+            state.Vx + (k3vx * dt),
+            state.Vy + (k3vy * dt));
         acceleration(in state4, time + dt, out double ax4, out double ay4);
         double k4x = state4.Vx;
         double k4y = state4.Vy;
@@ -178,10 +178,10 @@ public static class StructOdeSolver
 
         // y(t+dt) = y(t) + (k1 + 2*k2 + 2*k3 + k4) * dt / 6
         double sixth = 1.0 / 6.0;
-        state.X += (k1x + 2.0 * k2x + 2.0 * k3x + k4x) * dt * sixth;
-        state.Y += (k1y + 2.0 * k2y + 2.0 * k3y + k4y) * dt * sixth;
-        state.Vx += (k1vx + 2.0 * k2vx + 2.0 * k3vx + k4vx) * dt * sixth;
-        state.Vy += (k1vy + 2.0 * k2vy + 2.0 * k3vy + k4vy) * dt * sixth;
+        state.X += (k1x + (2.0 * k2x) + (2.0 * k3x) + k4x) * dt * sixth;
+        state.Y += (k1y + (2.0 * k2y) + (2.0 * k3y) + k4y) * dt * sixth;
+        state.Vx += (k1vx + (2.0 * k2vx) + (2.0 * k3vx) + k4vx) * dt * sixth;
+        state.Vy += (k1vy + (2.0 * k2vy) + (2.0 * k3vy) + k4vy) * dt * sixth;
     }
 
     /// <summary>
@@ -219,8 +219,8 @@ public static class StructOdeSolver
         acceleration(in state, time, out double ax1, out double ay1);
 
         // Update position: x(t+dt) = x(t) + v(t)*dt + 0.5*a(t)*dt²
-        state.X += state.Vx * dt + 0.5 * ax1 * dt * dt;
-        state.Y += state.Vy * dt + 0.5 * ay1 * dt * dt;
+        state.X += (state.Vx * dt) + (0.5 * ax1 * dt * dt);
+        state.Y += (state.Vy * dt) + (0.5 * ay1 * dt * dt);
 
         // Get new acceleration at new position
         acceleration(in state, time + dt, out double ax2, out double ay2);
