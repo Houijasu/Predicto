@@ -84,8 +84,8 @@ public readonly struct LinearDangerField : IDangerField
         Point2D origin,
         Vector2D direction,
         LinearSkillshot skillshot,
-        double amplitude = 1000.0,
-        double falloffMultiplier = 2.0)
+        double amplitude = Constants.DefaultDangerAmplitude,
+        double falloffMultiplier = Constants.DangerFalloffMultiplier)
     {
         Origin = origin;
         Direction = direction.Normalize();
@@ -253,9 +253,9 @@ public readonly struct CircularDangerField : IDangerField
     public CircularDangerField(
         Point2D center,
         CircularSkillshot skillshot,
-        double amplitude = 1000.0,
-        double falloffMultiplier = 1.5,
-        double anticipationWindow = 0.3)
+        double amplitude = Constants.DefaultDangerAmplitude,
+        double falloffMultiplier = Constants.DefaultCircularDangerFalloff,
+        double anticipationWindow = Constants.DefaultAnticipationWindow)
     {
         Center = center;
         Radius = skillshot.Radius;

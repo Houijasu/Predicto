@@ -1,3 +1,4 @@
+using System.Runtime.Intrinsics.X86;
 using MathNet.Spatial.Euclidean;
 using Predicto;
 using Predicto.Models;
@@ -1229,6 +1230,190 @@ public class EdgeCaseRegressionTests
         double interceptDistance = 1500 * (result.Value - 0.25);
         Assert.True(interceptDistance <= 1000 + 1, // Allow tiny tolerance
             $"Intercept distance {interceptDistance} should be <= 1000");
+    }
+
+    #endregion
+
+    #region Audit: Acceleration Solver Validation
+
+    [Fact]
+    public void SolveAccelerationInterceptDirect_NegativeSpeed_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            InterceptSolver.SolveAccelerationInterceptDirect(
+                new Point2D(0, 0),
+                new Point2D(400, 0),
+                new Vector2D(0, 200),
+                new Vector2D(0, 0),
+                skillshotSpeed: -1,
+                skillshotAcceleration: 0,
+                castDelay: 0.25,
+                targetHitboxRadius: 65,
+                skillshotWidth: 70,
+                skillshotRange: 1000));
+    }
+
+    [Fact]
+    public void SolveAccelerationInterceptDirect_NegativeHitbox_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            InterceptSolver.SolveAccelerationInterceptDirect(
+                new Point2D(0, 0),
+                new Point2D(400, 0),
+                new Vector2D(0, 200),
+                new Vector2D(0, 0),
+                skillshotSpeed: 1500,
+                skillshotAcceleration: 0,
+                castDelay: 0.25,
+                targetHitboxRadius: -10,
+                skillshotWidth: 70,
+                skillshotRange: 1000));
+    }
+
+    [Fact]
+    public void SolveAccelerationInterceptDirect_ValidInput_ReturnsResult()
+    {
+        var result = InterceptSolver.SolveAccelerationInterceptDirect(
+            new Point2D(0, 0),
+            new Point2D(400, 0),
+            new Vector2D(0, 200),
+            new Vector2D(50, 0),
+            skillshotSpeed: 1500,
+            skillshotAcceleration: 0,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 2000);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.InterceptTime > 0.25);
+        Assert.False(double.IsNaN(result.Value.AimPoint.X));
+    }
+
+    [Fact]
+    public void SolveAccelerationInterceptDirect_CasterRadiusIncluded()
+    {
+        var withRadius = InterceptSolver.SolveAccelerationInterceptDirect(
+            new Point2D(0, 0),
+            new Point2D(400, 0),
+            new Vector2D(0, 200),
+            new Vector2D(0, 0),
+            skillshotSpeed: 1500,
+            skillshotAcceleration: 0,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 2000,
+            casterRadius: 65);
+
+        var withoutRadius = InterceptSolver.SolveAccelerationInterceptDirect(
+            new Point2D(0, 0),
+            new Point2D(400, 0),
+            new Vector2D(0, 200),
+            new Vector2D(0, 0),
+            skillshotSpeed: 1500,
+            skillshotAcceleration: 0,
+            castDelay: 0.25,
+            targetHitboxRadius: 65,
+            skillshotWidth: 70,
+            skillshotRange: 2000,
+            casterRadius: 0);
+
+        Assert.NotNull(withRadius);
+        Assert.NotNull(withoutRadius);
+
+        // Larger effective radius → earlier intercept
+        Assert.True(withRadius.Value.InterceptTime <= withoutRadius.Value.InterceptTime,
+            "Caster radius should allow earlier interception");
+    }
+
+    #endregion
+
+    #region Audit: SIMD Prefilter / Scalar Parity
+
+    [Fact]
+    public void PreFilterTargets_SimdAndScalar_ProduceSameResults()
+    {
+        if (!Avx.IsSupported)
+            return;
+
+        var prediction = new Ultimate();
+        var casterPos = new Point2D(0, 0);
+        var skillshot = new LinearSkillshot(Speed: 1500, Range: 500, Width: 70, Delay: 0.25);
+
+        var scalarTargets = new TargetCandidate[]
+        {
+            new(new Point2D(1400, 0), new Vector2D(0, 0), Tag: "A"),
+            new(new Point2D(600, 0), new Vector2D(0, 0), Tag: "B"),
+            new(new Point2D(2000, 0), new Vector2D(0, 0), Tag: "C"),
+        };
+
+        var scalarRanked = prediction.RankTargets(casterPos, skillshot, scalarTargets);
+
+        var simdTargets = new TargetCandidate[]
+        {
+            scalarTargets[0],
+            scalarTargets[1],
+            scalarTargets[2],
+            new(new Point2D(5000, 0), new Vector2D(0, 0), Tag: "D"),
+        };
+
+        var simdRanked = prediction.RankTargets(casterPos, skillshot, simdTargets);
+
+        static Type ResultTypeFor(IReadOnlyList<RankedTarget> ranked, string tag)
+        {
+            foreach (var entry in ranked)
+            {
+                if (entry.Tag is string entryTag && entryTag == tag)
+                    return entry.Result.GetType();
+            }
+
+            return typeof(void);
+        }
+
+        Assert.Equal(ResultTypeFor(scalarRanked, "A"), ResultTypeFor(simdRanked, "A"));
+        Assert.Equal(ResultTypeFor(scalarRanked, "B"), ResultTypeFor(simdRanked, "B"));
+        Assert.Equal(ResultTypeFor(scalarRanked, "C"), ResultTypeFor(simdRanked, "C"));
+    }
+
+    #endregion
+
+    #region Audit: Circular Path Confidence Clamping
+
+    [Fact]
+    public void PredictCircularWithPath_ConfidenceProgressClamped()
+    {
+        var prediction = new Ultimate();
+
+        // Path with very short remaining time so Delay > remainingPathTime
+        var path = TargetPath.FromDestination(
+            new Point2D(200, 0),
+            new Point2D(210, 0),
+            speed: 350);
+
+        var input = CircularPredictionInput.WithPath(
+            new Point2D(0, 0),
+            path,
+            new CircularSkillshot(Radius: 200, Range: 1100, Delay: 0.5));
+
+        var result = prediction.PredictCircular(input);
+
+        if (result is PredictionResult.Hit hit)
+        {
+            Assert.True(hit.Confidence >= Constants.Epsilon);
+            Assert.True(hit.Confidence <= 1.0);
+        }
+    }
+
+    #endregion
+
+    #region Audit: TargetCandidate Default Hitbox
+
+    [Fact]
+    public void TargetCandidate_DefaultHitbox_EqualsConstant()
+    {
+        var candidate = new TargetCandidate(new Point2D(0, 0), new Vector2D(0, 0));
+        Assert.Equal(Constants.DefaultHitboxRadius, candidate.HitboxRadius);
     }
 
     #endregion

@@ -166,7 +166,7 @@ public readonly record struct CircularPredictionInput(
 public readonly record struct TargetCandidate(
     Point2D Position,
     Vector2D Velocity,
-    double HitboxRadius = 65.0,
+    double HitboxRadius = Constants.DefaultHitboxRadius,
     double PriorityWeight = 1.0,
     TargetPath? Path = null,
     object? Tag = null,
@@ -177,7 +177,7 @@ public readonly record struct TargetCandidate(
     /// </summary>
     public static TargetCandidate WithPath(
         TargetPath path,
-        double hitboxRadius = 65.0,
+        double hitboxRadius = Constants.DefaultHitboxRadius,
         double priorityWeight = 1.0,
         object? tag = null,
         BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)
@@ -197,7 +197,7 @@ public readonly record struct TargetCandidate(
     /// </summary>
     public static TargetCandidate Stationary(
         Point2D position,
-        double hitboxRadius = 65.0,
+        double hitboxRadius = Constants.DefaultHitboxRadius,
         double priorityWeight = 1.0,
         object? tag = null,
         BehindEdgeStrategy strategy = BehindEdgeStrategy.Adaptive)

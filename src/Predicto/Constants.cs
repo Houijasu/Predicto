@@ -11,8 +11,9 @@ public static class Constants
 {
     /// <summary>
     /// Numerical epsilon for floating-point comparisons.
+    /// Aligned with MathNet.Numerics Precision.DoublePrecision (~1.11e-16).
     /// </summary>
-    public const double Epsilon = 1e-9;
+    public const double Epsilon = 1.1102230246251565E-16;
 
     /// <summary>
     /// Tolerance for range comparisons to account for floating-point precision.
@@ -140,6 +141,14 @@ public static class Constants
     /// </summary>
     public const double HitscanConfidenceBoost = 1.1;
 
+    // === Pre-Filter & Multi-Target Thresholds ===
+
+    /// <summary>
+    /// Generous distance buffer added to range when pre-filtering targets.
+    /// Accounts for hitbox radius and movement uncertainty.
+    /// </summary>
+    public const double PrefilterBuffer = 1000.0;
+
     // === Solver Tuning Constants ===
 
     /// <summary>
@@ -252,6 +261,16 @@ public static class Constants
     /// Larger values create wider danger zones.
     /// </summary>
     public const double DangerFalloffMultiplier = 2.0;
+
+    /// <summary>
+    /// Default falloff multiplier relative to radius for circular danger fields.
+    /// </summary>
+    public const double DefaultCircularDangerFalloff = 1.5;
+
+    /// <summary>
+    /// Default anticipation window (seconds) for circular danger fields.
+    /// </summary>
+    public const double DefaultAnticipationWindow = 0.3;
 
     /// <summary>
     /// Maximum acceleration for dodge maneuvers (units/second²).

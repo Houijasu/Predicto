@@ -2455,23 +2455,21 @@ public sealed class InterceptSolver
 
         // Track cumulative time offset as we traverse path segments
         double segmentStartTime = 0;
+        int segmentCount = path.SegmentCount;
 
-        foreach (var segment in path.EnumerateSegments())
+        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
         {
-            // Calculate time bounds for this segment
+            var segment = path.GetSegment(segIdx);
+
             double segmentLength = segment.Length;
             if (segmentLength < Constants.Epsilon)
-            {
-                continue; // Skip zero-length segments
-            }
+                continue;
 
             double segmentDuration = segmentLength / path.Speed;
             double segmentEndTime = segmentStartTime + segmentDuration;
 
-            // Get velocity for this segment
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Analytical segment pruning: skip segments that can't contain solutions
             if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
                 skillshotSpeed, castDelay, skillshotRange, 0, segmentStartTime))
             {
@@ -2718,6 +2716,9 @@ public sealed class InterceptSolver
         double skillshotRange,
         double casterRadius = 0)
     {
+        ValidateInputs(skillshotSpeed, castDelay, skillshotRange);
+        ValidateCollisionInputs(targetHitboxRadius, skillshotWidth);
+
         double r = targetHitboxRadius + (skillshotWidth / 2) + casterRadius;
         double s = skillshotSpeed;
         double a_p = skillshotAcceleration;
@@ -2809,9 +2810,12 @@ public sealed class InterceptSolver
         }
 
         double segmentStartTime = 0;
+        int segmentCount = path.SegmentCount;
 
-        foreach (var segment in path.EnumerateSegments())
+        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
         {
+            var segment = path.GetSegment(segIdx);
+
             double segmentLength = segment.Length;
             if (segmentLength < Constants.Epsilon)
                 continue;
@@ -2879,9 +2883,12 @@ public sealed class InterceptSolver
         }
 
         double segmentStartTime = 0;
+        int segmentCount = path.SegmentCount;
 
-        foreach (var segment in path.EnumerateSegments())
+        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
         {
+            var segment = path.GetSegment(segIdx);
+
             double segmentLength = segment.Length;
             if (segmentLength < Constants.Epsilon)
                 continue;
@@ -2890,7 +2897,6 @@ public sealed class InterceptSolver
             double segmentEndTime = segmentStartTime + segmentDuration;
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Analytical segment pruning: skip segments that can't contain solutions
             if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
                 skillshotSpeed, castDelay, skillshotRange, effectiveRadius, segmentStartTime))
             {
@@ -2898,7 +2904,6 @@ public sealed class InterceptSolver
                 continue;
             }
 
-            // Calculate strategy-specific initial point for this segment
             Point2D virtualStart = CalculateBehindInitialPoint(
                 casterPosition, segment.Start, segmentVelocity, effectiveRadius, behindMargin, strategy);
 
@@ -2916,7 +2921,6 @@ public sealed class InterceptSolver
             {
                 double interceptTime = interceptResult.Value;
 
-                // Calculate aim point using strategy at the actual intercept time
                 Point2D predictedPos = path.GetPositionAtTime(interceptTime);
                 Vector2D velocityAtIntercept = path.GetVelocityAtTime(interceptTime);
 
@@ -3052,9 +3056,12 @@ public sealed class InterceptSolver
         double behindDistance = effectiveRadius - actualMargin;
 
         double segmentStartTime = 0;
+        int segmentCount = path.SegmentCount;
 
-        foreach (var segment in path.EnumerateSegments())
+        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
         {
+            var segment = path.GetSegment(segIdx);
+
             double segmentLength = segment.Length;
             if (segmentLength < Constants.Epsilon)
                 continue;
@@ -3081,7 +3088,6 @@ public sealed class InterceptSolver
             {
                 double interceptTime = interceptResult.Value;
 
-                // FIX: Calculate aim point using velocity at intercept time
                 Point2D predictedPos = path.GetPositionAtTime(interceptTime);
                 Vector2D velocityAtIntercept = path.GetVelocityAtTime(interceptTime);
 
@@ -3091,7 +3097,6 @@ public sealed class InterceptSolver
 
                 Point2D aimPoint = predictedPos + (moveDirectionAtIntercept.Negate() * behindDistance);
 
-                // Verify hit - the separation should be approximately behindDistance
                 double separation = (aimPoint - predictedPos).Length;
                 if (separation <= effectiveRadius)
                 {
@@ -3744,9 +3749,12 @@ public sealed class InterceptSolver
         }
 
         double segmentStartTime = 0;
+        int segmentCount = path.SegmentCount;
 
-        foreach (var segment in path.EnumerateSegments())
+        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
         {
+            var segment = path.GetSegment(segIdx);
+
             double segmentLength = segment.Length;
             if (segmentLength < Constants.Epsilon)
                 continue;
@@ -3755,7 +3763,6 @@ public sealed class InterceptSolver
             double segmentEndTime = segmentStartTime + segmentDuration;
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Analytical segment pruning
             if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
                 skillshotSpeed, castDelay, skillshotRange, effectiveRadius, segmentStartTime))
             {
@@ -3763,7 +3770,6 @@ public sealed class InterceptSolver
                 continue;
             }
 
-            // Find optimal intercept within this segment using Gagong algorithm
             var result = SolveGagongSegmentIntercept(
                 casterPosition,
                 segment.Start,

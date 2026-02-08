@@ -426,7 +426,7 @@ public sealed class Ultimate : IPrediction
                 input.TargetHitboxRadius,
                 input.Skillshot.Width,
                 input.Skillshot.Range,
-                input.MinimizeTime ? input.CasterHitboxRadius : 0);
+                input.CasterHitboxRadius);
         }
         else if (input.MinimizeTime)
         {
@@ -892,7 +892,7 @@ public sealed class Ultimate : IPrediction
             dangerField.Force(s.Position, t, out double fx, out double fy);
 
             // Limit acceleration to target's capabilities (simplified)
-            double maxAcc = 2000.0;
+            double maxAcc = Constants.MaxDodgeAcceleration;
             double forceLen = Math.Sqrt((fx * fx) + (fy * fy));
             if (forceLen > maxAcc)
             {
@@ -1001,8 +1001,8 @@ public sealed class Ultimate : IPrediction
         double remainingPathTime = path.GetRemainingPathTime();
         if (remainingPathTime > Constants.Epsilon && input.Skillshot.Delay > 0)
         {
-            double pathProgress = input.Skillshot.Delay / remainingPathTime;
-            double pathPenalty = 1 - (0.5 * pathProgress);
+            double pathProgress = Math.Clamp(input.Skillshot.Delay / remainingPathTime, 0, 1);
+            double pathPenalty = 1 - (Constants.SegmentProgressPenaltyFactor * pathProgress);
             confidence *= pathPenalty;
         }
 
@@ -1370,6 +1370,10 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Performs SIMD-accelerated pre-filtering of targets to improve ranking speed.
     /// Filters out targets that are mathematically impossible to hit based on range.
+    ///
+    /// Both SIMD and scalar paths use squared-distance comparison:
+    ///   distSq ≤ (maxRange + hitboxRadius + PrefilterBuffer)²
+    /// The SIMD path batches 4 targets at a time and uses per-lane hitbox radii.
     /// </summary>
     private static void PreFilterTargetsSimd(
         Point2D casterPos,
@@ -1377,12 +1381,15 @@ public sealed class Ultimate : IPrediction
         ReadOnlySpan<TargetCandidate> targets,
         Span<bool> outReachable)
     {
-        if (!Avx2.IsSupported || targets.Length < 4)
+        if (!Avx.IsSupported || targets.Length < 4)
         {
+            // Scalar fallback: squared-distance comparison with per-target hitbox
             for (int i = 0; i < targets.Length; i++)
             {
-                double dist = (targets[i].Position - casterPos).Length;
-                outReachable[i] = dist <= maxRange + targets[i].HitboxRadius + 1000; // Generous buffer
+                var disp = targets[i].Position - casterPos;
+                double distSq = disp.DotProduct(disp);
+                double limit = maxRange + targets[i].HitboxRadius + Constants.PrefilterBuffer;
+                outReachable[i] = distSq <= limit * limit;
             }
             return;
         }
@@ -1390,7 +1397,7 @@ public sealed class Ultimate : IPrediction
         int iSimd = 0;
         Vector256<double> cx = Vector256.Create(casterPos.X);
         Vector256<double> cy = Vector256.Create(casterPos.Y);
-        Vector256<double> rangeLimit = Vector256.Create(maxRange + 1500); // Generous buffer
+        Vector256<double> baseRange = Vector256.Create(maxRange + Constants.PrefilterBuffer);
 
         for (; iSimd <= targets.Length - 4; iSimd += 4)
         {
@@ -1400,6 +1407,14 @@ public sealed class Ultimate : IPrediction
             Vector256<double> dx = Avx.Subtract(tx, cx);
             Vector256<double> dy = Avx.Subtract(ty, cy);
             Vector256<double> distSq = Avx.Add(Avx.Multiply(dx, dx), Avx.Multiply(dy, dy));
+
+            Vector256<double> hitbox = Vector256.Create(
+                targets[iSimd].HitboxRadius,
+                targets[iSimd + 1].HitboxRadius,
+                targets[iSimd + 2].HitboxRadius,
+                targets[iSimd + 3].HitboxRadius);
+
+            Vector256<double> rangeLimit = Avx.Add(baseRange, hitbox);
             Vector256<double> limitSq = Avx.Multiply(rangeLimit, rangeLimit);
 
             Vector256<double> mask = Avx.CompareLessThanOrEqual(distSq, limitSq);
@@ -1410,10 +1425,13 @@ public sealed class Ultimate : IPrediction
             outReachable[iSimd + 3] = mask.GetElement(3) != 0;
         }
 
+        // Scalar tail: identical formula shape (squared-distance), with per-target hitbox
         for (; iSimd < targets.Length; iSimd++)
         {
-            double dist = (targets[iSimd].Position - casterPos).Length;
-            outReachable[iSimd] = dist <= maxRange + targets[iSimd].HitboxRadius + 1000;
+            var disp = targets[iSimd].Position - casterPos;
+            double distSq = disp.DotProduct(disp);
+            double limit = maxRange + targets[iSimd].HitboxRadius + Constants.PrefilterBuffer;
+            outReachable[iSimd] = distSq <= limit * limit;
         }
     }
 
