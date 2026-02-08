@@ -2471,7 +2471,7 @@ public sealed class InterceptSolver
             // Get velocity for this segment
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Sug 2: Analytical Segment Pruning
+            // Analytical segment pruning: skip segments that can't contain solutions
             if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
                 skillshotSpeed, castDelay, skillshotRange, 0, segmentStartTime))
             {
@@ -2533,8 +2533,8 @@ public sealed class InterceptSolver
         double skillshotRange,
         double casterRadius)
     {
-        // Suggestion 3: Caster Offset reduces effective travel distance
-        // Sug 2: Front-line collision saves skillshotWidth/2 distance compared to circle model
+        // Caster offset reduces effective travel distance
+        // Front-line collision saves skillshotWidth/2 distance compared to circle model
         // Combined effective radius for minimal contact
         double effectiveRadius = targetRadius + casterRadius;
 
@@ -2553,7 +2553,7 @@ public sealed class InterceptSolver
             return (posAtDelay, posAtDelay, delay, path.CurrentWaypointIndex);
         }
 
-        // Suggestion 1: Global Path Root-Finding
+        // Global path root-finding across all segments
         // We find the first root of f(t) = |P(t) - C| - (s*(t-delay) + combinedR)
         Func<double, double> collisionFunc = t =>
         {
@@ -2633,7 +2633,7 @@ public sealed class InterceptSolver
         double skillshotRange,
         double casterRadius)
     {
-        // Sug 3: Caster Offset + Sug 2: Rectangular front
+        // Caster offset + rectangular front collision model
         // Effective combined radius for minimal contact
         double combinedR = targetRadius + casterRadius;
 
@@ -2675,7 +2675,7 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            // Use MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
             double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
@@ -2890,7 +2890,7 @@ public sealed class InterceptSolver
             double segmentEndTime = segmentStartTime + segmentDuration;
             Vector2D segmentVelocity = segment.Direction * path.Speed;
 
-            // Sug 2: Analytical Segment Pruning
+            // Analytical segment pruning: skip segments that can't contain solutions
             if (!IsSegmentReachable(casterPosition, segment.Start, segmentVelocity, segmentDuration,
                 skillshotSpeed, castDelay, skillshotRange, effectiveRadius, segmentStartTime))
             {
@@ -3159,7 +3159,7 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            // Use MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
             double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;
@@ -3271,7 +3271,7 @@ public sealed class InterceptSolver
         }
         else
         {
-            // Sug: Use inbuilt MathNet quadratic solver for numerical stability
+            // Use MathNet quadratic solver for numerical stability
             var (root1, root2) = FindRoots.Quadratic(c, b, a);
 
             double? t1 = Math.Abs(root1.Imaginary) < Constants.Epsilon ? root1.Real : null;

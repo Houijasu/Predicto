@@ -184,7 +184,7 @@ public static class OffPathAimPointSolver
             casterPosition, predictedPos, velocity, effectiveRadius, strategy);
 
         // Refine: the aim point changes the travel distance, which may change intercept time
-        // Sug 4: Continuous Collision Detection (CCD)
+        // Continuous Collision Detection (CCD) via iterative Brent's method refinement
         // Iterative refinement using Brent's method to find the true intercept time
         // for an off-path aim point. This is more robust than a fixed 5-iteration loop.
 

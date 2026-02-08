@@ -116,6 +116,22 @@ public static class Constants
     /// </summary>
     public const double PathEndBlendThreshold = 0.5;
 
+    // === Waypoint Confidence Penalty Constants ===
+
+    /// <summary>
+    /// Base factor for waypoint penalty calculation.
+    /// Confidence decays exponentially: penalty = WaypointPenaltyBase ^ waypointDelta.
+    /// Each additional waypoint halves the confidence (0.5^1 = 50%, 0.5^2 = 25%, etc.).
+    /// </summary>
+    public const double WaypointPenaltyBase = 0.5;
+
+    /// <summary>
+    /// Maximum confidence reduction factor for path segment progress.
+    /// At 100% path progress, confidence is multiplied by (1 - SegmentProgressPenaltyFactor) = 0.5.
+    /// At 50% progress, penalty is 0.75x. Linear interpolation.
+    /// </summary>
+    public const double SegmentProgressPenaltyFactor = 0.5;
+
     // === Hitscan Confidence ===
 
     /// <summary>

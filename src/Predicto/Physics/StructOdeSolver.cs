@@ -7,6 +7,8 @@ namespace Predicto.Physics;
 /// Represents the state of a 2D particle for physics simulation.
 /// Stack-allocated struct to avoid GC pressure.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1051:Do not declare visible instance fields",
+    Justification = "Performance-critical struct uses public fields for zero-allocation physics simulation")]
 public struct ParticleState
 {
     /// <summary>X position</summary>
@@ -76,6 +78,8 @@ public struct ParticleState
 /// <summary>
 /// Represents the derivative of a particle state (acceleration).
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1051:Do not declare visible instance fields",
+    Justification = "Performance-critical struct uses public fields for zero-allocation physics simulation")]
 public struct StateDerivative
 {
     /// <summary>X velocity (dx/dt)</summary>

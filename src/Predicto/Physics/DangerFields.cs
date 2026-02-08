@@ -47,6 +47,8 @@ public interface IDangerField
 /// Creates a moving tube of danger that follows the projectile path.
 /// Uses Lorentzian falloff for fast computation: U = A / (1 + d²/σ²)
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1051:Do not declare visible instance fields",
+    Justification = "Performance-critical readonly struct uses public fields for zero-allocation physics simulation")]
 public readonly struct LinearDangerField : IDangerField
 {
     /// <summary>Caster position (skillshot origin)</summary>
@@ -218,6 +220,8 @@ public readonly struct LinearDangerField : IDangerField
 /// Danger field for circular (ground-targeted) skillshots.
 /// Creates a radial danger zone that activates at detonation time.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1051:Do not declare visible instance fields",
+    Justification = "Performance-critical readonly struct uses public fields for zero-allocation physics simulation")]
 public readonly struct CircularDangerField : IDangerField
 {
     /// <summary>Center of the circular ability</summary>

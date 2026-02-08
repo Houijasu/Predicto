@@ -75,6 +75,8 @@ public sealed class Ultimate : IPrediction
     /// This always aims behind the target, regardless of path position.
     /// Used for visualization comparison with the blended prediction.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+        Justification = "Public API method — instance method for API consistency with IPrediction pattern")]
     public PredictionResult PredictPureTrailingEdge(PredictionInput input)
     {
         // === Input Validation ===
@@ -100,7 +102,7 @@ public sealed class Ultimate : IPrediction
     /// When <paramref name="pureTrailingEdge"/> is true, skips hitscan/MinimizeTime/Gagong
     /// fast paths and disables path-end blending (always uses full adaptive margin).
     /// </summary>
-    private PredictionResult PredictWithPath(PredictionInput input, bool pureTrailingEdge = false)
+    private static PredictionResult PredictWithPath(PredictionInput input, bool pureTrailingEdge = false)
     {
         var path = input.TargetPath!;
 
@@ -145,12 +147,12 @@ public sealed class Ultimate : IPrediction
             return PredictStationary(input, distance, effectiveRadius);
         }
 
-        // Sug 6: Disable Path-End Blending and use Minimal Solver if requested
-        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, int WaypointIndex)? mResult = null;
+        // MinimizeTime: Disable path-end blending and use minimal solver for earliest collision
+        (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime, int WaypointIndex)? minTimeResult = null;
 
         if (!pureTrailingEdge && input.MinimizeTime)
         {
-            mResult = InterceptSolver.SolvePathMinimalIntercept(
+            minTimeResult = InterceptSolver.SolvePathMinimalIntercept(
                 input.CasterPosition,
                 path,
                 input.Skillshot.Speed,
@@ -161,20 +163,20 @@ public sealed class Ultimate : IPrediction
                 input.CasterHitboxRadius);
         }
 
-        if (mResult.HasValue)
+        if (minTimeResult.HasValue)
         {
-            var hit = mResult.Value;
+            var hit = minTimeResult.Value;
 
             // Still calculate confidence and range correctly
-            double mFlightTime = Math.Max(0, hit.InterceptTime - input.Skillshot.Delay);
-            double mTravelDistance = input.Skillshot.Speed * mFlightTime;
+            double minFlightTime = Math.Max(0, hit.InterceptTime - input.Skillshot.Delay);
+            double minTravelDistance = input.Skillshot.Speed * minFlightTime;
 
-            if (mTravelDistance > input.Skillshot.Range + Constants.RangeTolerance)
+            if (minTravelDistance > input.Skillshot.Range + Constants.RangeTolerance)
             {
-                return new PredictionResult.OutOfRange(mTravelDistance, input.Skillshot.Range);
+                return new PredictionResult.OutOfRange(minTravelDistance, input.Skillshot.Range);
             }
 
-            double mConfidence = CalculateEnhancedConfidence(
+            double minConfidence = CalculateEnhancedConfidence(
                 hit.InterceptTime,
                 distance,
                 path.Speed,
@@ -188,7 +190,7 @@ public sealed class Ultimate : IPrediction
                 CastPosition: hit.AimPoint,
                 PredictedTargetPosition: hit.PredictedTargetPosition,
                 InterceptTime: hit.InterceptTime,
-                Confidence: mConfidence);
+                Confidence: minConfidence);
         }
 
         // === Gagong Strategy: Use dedicated minimum-time behind-edge solver ===
@@ -231,7 +233,7 @@ public sealed class Ultimate : IPrediction
             if (gagongHit.WaypointIndex > path.CurrentWaypointIndex)
             {
                 int waypointDelta = gagongHit.WaypointIndex - path.CurrentWaypointIndex;
-                double waypointPenalty = Math.Pow(0.5, waypointDelta);
+                double waypointPenalty = Math.Pow(Constants.WaypointPenaltyBase, waypointDelta);
                 gagongConfidence *= waypointPenalty;
             }
 
@@ -239,7 +241,7 @@ public sealed class Ultimate : IPrediction
             if (gagongRemainingPathTime > Constants.Epsilon)
             {
                 double segmentProgress = Math.Clamp(gagongHit.InterceptTime / gagongRemainingPathTime, 0, 1);
-                double segmentPenalty = 1 - (0.5 * segmentProgress);
+                double segmentPenalty = 1 - (Constants.SegmentProgressPenaltyFactor * segmentProgress);
                 gagongConfidence *= segmentPenalty;
             }
 
@@ -312,7 +314,7 @@ public sealed class Ultimate : IPrediction
         if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
         {
             int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
-            double waypointPenalty = Math.Pow(0.5, waypointDelta); // 50% reduction per waypoint
+            double waypointPenalty = Math.Pow(Constants.WaypointPenaltyBase, waypointDelta); // 50% reduction per waypoint
             confidence *= waypointPenalty;
         }
 
@@ -327,7 +329,7 @@ public sealed class Ultimate : IPrediction
             double segmentProgress = Math.Clamp(interceptResult.InterceptTime / remainingPathTime, 0, 1);
             // Apply mild penalty for predictions deep into the path (linear decay)
             // At 100% path progress: 0.5x confidence, at 50%: 0.75x
-            double segmentPenalty = 1 - (0.5 * segmentProgress);
+            double segmentPenalty = 1 - (Constants.SegmentProgressPenaltyFactor * segmentProgress);
             confidence *= segmentPenalty;
         }
 
@@ -341,7 +343,7 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Velocity-based prediction for simple linear movement.
     /// </summary>
-    private PredictionResult PredictWithVelocity(PredictionInput input)
+    private static PredictionResult PredictWithVelocity(PredictionInput input)
     {
         // === Velocity Sanity Checks ===
 
@@ -405,7 +407,7 @@ public sealed class Ultimate : IPrediction
             return PredictStationary(input, distance, effectiveRadius);
         }
 
-        // Sug 1: Acceleration-Aware Kinematics
+        // Acceleration-aware kinematics
         (Point2D AimPoint, Point2D PredictedTargetPosition, double InterceptTime)? result = null;
 
         bool hasAcceleration = input.TargetAcceleration.DotProduct(input.TargetAcceleration) > Constants.Epsilon ||
@@ -498,7 +500,7 @@ public sealed class Ultimate : IPrediction
     /// After cast delay, the beam exists instantly from caster to range.
     /// Intercept time = castDelay (no projectile travel time).
     /// </summary>
-    private PredictionResult PredictHitscan(PredictionInput input)
+    private static PredictionResult PredictHitscan(PredictionInput input)
     {
         // === Geometry Setup ===
         var displacement = input.TargetPosition - input.CasterPosition;
@@ -579,7 +581,7 @@ public sealed class Ultimate : IPrediction
     /// Hitscan prediction for path-based movement.
     /// For instant beams (Lux R, Xerath Q, etc.) when target has a known movement path.
     /// </summary>
-    private PredictionResult PredictHitscanWithPath(PredictionInput input)
+    private static PredictionResult PredictHitscanWithPath(PredictionInput input)
     {
         var path = input.TargetPath!;
 
@@ -645,7 +647,7 @@ public sealed class Ultimate : IPrediction
         if (interceptResult.WaypointIndex > path.CurrentWaypointIndex)
         {
             int waypointDelta = interceptResult.WaypointIndex - path.CurrentWaypointIndex;
-            double waypointPenalty = Math.Pow(0.5, waypointDelta);
+            double waypointPenalty = Math.Pow(Constants.WaypointPenaltyBase, waypointDelta);
             confidence *= waypointPenalty;
         }
 
@@ -958,7 +960,7 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Circular prediction with path-based target movement.
     /// </summary>
-    private PredictionResult PredictCircularWithPath(CircularPredictionInput input)
+    private static PredictionResult PredictCircularWithPath(CircularPredictionInput input)
     {
         var path = input.TargetPath!;
 
@@ -1014,7 +1016,7 @@ public sealed class Ultimate : IPrediction
     /// <summary>
     /// Circular prediction with velocity-based target movement.
     /// </summary>
-    private PredictionResult PredictCircularWithVelocity(CircularPredictionInput input)
+    private static PredictionResult PredictCircularWithVelocity(CircularPredictionInput input)
     {
         // === Velocity Sanity Checks ===
         double targetSpeed = input.TargetVelocity.Length;
@@ -1172,7 +1174,7 @@ public sealed class Ultimate : IPrediction
 
         var results = new List<RankedTarget>(targets.Length);
 
-        // Sug 4: SIMD-Vectorized Pre-filtering
+        // SIMD-vectorized pre-filtering for range check
         Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
         PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
 
@@ -1227,7 +1229,7 @@ public sealed class Ultimate : IPrediction
 
         var results = new List<RankedTarget>(targets.Length);
 
-        // Sug 4: SIMD-Vectorized Pre-filtering
+        // SIMD-vectorized pre-filtering for range check
         Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
         PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
 
@@ -1369,7 +1371,7 @@ public sealed class Ultimate : IPrediction
     /// Performs SIMD-accelerated pre-filtering of targets to improve ranking speed.
     /// Filters out targets that are mathematically impossible to hit based on range.
     /// </summary>
-    private void PreFilterTargetsSimd(
+    private static void PreFilterTargetsSimd(
         Point2D casterPos,
         double maxRange,
         ReadOnlySpan<TargetCandidate> targets,
