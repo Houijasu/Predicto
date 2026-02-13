@@ -1354,47 +1354,6 @@ public class UltimateTests
 
     #endregion
 
-    #region Reactive Prediction Tests
-
-    [Fact]
-    public void Reactive_StationaryTarget_ReturnsHit()
-    {
-#pragma warning disable CS0618
-        var input = new PredictionInput(
-            CasterPosition: new Point2D(0, 0),
-            TargetPosition: new Point2D(500, 0),
-            TargetVelocity: new Vector2D(0, 0),
-            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
-            Reactive: true);
-
-        var result = _prediction.Predict(input);
-
-        Assert.IsType<PredictionResult.Hit>(result);
-        var hit = (PredictionResult.Hit)result;
-        Assert.True(hit.InterceptTime > 0);
-#pragma warning restore CS0618
-    }
-
-    [Fact]
-    public void Reactive_OutOfRangeTarget_ReturnsAppropriateResult()
-    {
-#pragma warning disable CS0618
-        var input = new PredictionInput(
-            CasterPosition: new Point2D(0, 0),
-            TargetPosition: new Point2D(2000, 0),
-            TargetVelocity: new Vector2D(0, 0),
-            Skillshot: new LinearSkillshot(Speed: 1500, Range: 1000, Width: 70, Delay: 0.25),
-            Reactive: true);
-
-        var result = _prediction.Predict(input);
-
-        Assert.True(result is PredictionResult.OutOfRange or PredictionResult.Hit,
-            "Reactive out-of-range should return OutOfRange or a long-range Hit");
-#pragma warning restore CS0618
-    }
-
-    #endregion
-
     #region Circular Skillshot Path Prediction Tests
 
     [Fact]

@@ -5,7 +5,7 @@
 | Command | Purpose |
 |---------|---------|
 | `dotnet build` | Build entire solution |
-| `dotnet test` | Run all tests (185 tests) |
+| `dotnet test` | Run all tests (213 tests) |
 | `dotnet run --project src/Predicto.Simulation` | Visual simulation |
 
 ## Project Overview

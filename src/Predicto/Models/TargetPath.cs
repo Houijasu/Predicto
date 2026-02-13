@@ -12,7 +12,9 @@ public sealed class TargetPath
     /// The waypoints defining the path. Target moves from Waypoints[CurrentWaypointIndex] toward the end.
     /// Must contain at least 1 point (destination-only paths are allowed).
     /// </summary>
-    public IReadOnlyList<Point2D> Waypoints { get; }
+    public IReadOnlyList<Point2D> Waypoints => _waypoints;
+
+    private readonly Point2D[] _waypoints;
 
     /// <summary>
     /// Current position of the target (may be between waypoints).
@@ -29,6 +31,13 @@ public sealed class TargetPath
     /// Target's movement speed in units per second.
     /// </summary>
     public double Speed { get; }
+
+    // Pre-computed segment data: _segDistances[i] = distance from segment i start to end
+    // _segDirections[i] = normalized direction of segment i
+    // Segment 0 = CurrentPosition → Waypoints[CurrentWaypointIndex]
+    // Segment k = Waypoints[CurrentWaypointIndex + k - 1] → Waypoints[CurrentWaypointIndex + k]
+    private readonly double[] _segDistances;
+    private readonly Vector2D[] _segDirections;
 
     /// <summary>
     /// Creates a new target path.
@@ -47,10 +56,36 @@ public sealed class TargetPath
         if (speed < 0)
             throw new ArgumentException("Speed cannot be negative", nameof(speed));
 
-        Waypoints = waypoints;
+        // Store as concrete array for devirtualized indexed access
+        if (waypoints is Point2D[] arr)
+            _waypoints = arr;
+        else
+        {
+            _waypoints = new Point2D[waypoints.Count];
+            for (int i = 0; i < waypoints.Count; i++)
+                _waypoints[i] = waypoints[i];
+        }
+
         CurrentPosition = currentPosition;
         CurrentWaypointIndex = currentWaypointIndex;
         Speed = speed;
+
+        int segCount = _waypoints.Length - currentWaypointIndex;
+        _segDistances = new double[segCount];
+        _segDirections = new Vector2D[segCount];
+
+        var prev = currentPosition;
+        for (int i = 0; i < segCount; i++)
+        {
+            var next = _waypoints[currentWaypointIndex + i];
+            var delta = next - prev;
+            double len = delta.Length;
+            _segDistances[i] = len;
+            _segDirections[i] = len < Constants.Epsilon
+                ? new Vector2D(0, 0)
+                : delta.Normalize();
+            prev = next;
+        }
     }
 
     /// <summary>
@@ -71,16 +106,13 @@ public sealed class TargetPath
     /// </summary>
     public Vector2D GetCurrentVelocity()
     {
-        if (CurrentWaypointIndex >= Waypoints.Count)
+        if (CurrentWaypointIndex >= _waypoints.Length)
             return new Vector2D(0, 0);
 
-        var direction = Waypoints[CurrentWaypointIndex] - CurrentPosition;
-        var length = direction.Length;
-
-        if (length < Constants.Epsilon)
+        if (_segDistances[0] < Constants.Epsilon)
             return new Vector2D(0, 0);
 
-        return direction.Normalize() * Speed;
+        return _segDirections[0] * Speed;
     }
 
     /// <summary>
@@ -96,30 +128,29 @@ public sealed class TargetPath
 
         double remainingDistance = Speed * time;
         var position = CurrentPosition;
-        int waypointIndex = CurrentWaypointIndex;
 
-        while (remainingDistance > 0 && waypointIndex < Waypoints.Count)
+        for (int i = 0; i < _segDistances.Length; i++)
         {
-            var target = Waypoints[waypointIndex];
-            var toTarget = target - position;
-            var distanceToTarget = toTarget.Length;
+            double distanceToTarget = _segDistances[i];
+
+            if (i > 0)
+            {
+                var delta = _waypoints[CurrentWaypointIndex + i] - position;
+                distanceToTarget = delta.Length;
+            }
 
             if (distanceToTarget <= remainingDistance)
             {
-                // Reach this waypoint and continue to next
-                position = target;
+                position = _waypoints[CurrentWaypointIndex + i];
                 remainingDistance -= distanceToTarget;
-                waypointIndex++;
             }
             else
             {
-                // Stop partway to this waypoint
-                position = position + (toTarget.Normalize() * remainingDistance);
-                remainingDistance = 0;
+                Vector2D dir = (i == 0) ? _segDirections[0] : (_waypoints[CurrentWaypointIndex + i] - position).Normalize();
+                position = position + (dir * remainingDistance);
+                return position;
             }
         }
-
-        // Target stops at last waypoint (no continuation)
 
         return position;
     }
@@ -129,14 +160,13 @@ public sealed class TargetPath
     /// </summary>
     public double GetRemainingPathLength()
     {
-        if (CurrentWaypointIndex >= Waypoints.Count)
+        if (_segDistances.Length == 0)
             return 0;
 
-        double length = (Waypoints[CurrentWaypointIndex] - CurrentPosition).Length;
-
-        for (int i = CurrentWaypointIndex; i < Waypoints.Count - 1; i++)
+        double length = 0;
+        for (int i = 0; i < _segDistances.Length; i++)
         {
-            length += (Waypoints[i + 1] - Waypoints[i]).Length;
+            length += _segDistances[i];
         }
 
         return length;
@@ -165,42 +195,40 @@ public sealed class TargetPath
         if (time <= 0 || Speed < Constants.Epsilon)
             return GetCurrentVelocity();
 
-        // Find position and determine which segment we're on at that time
         double remainingDistance = Speed * time;
         var position = CurrentPosition;
-        int waypointIndex = CurrentWaypointIndex;
 
-        while (remainingDistance > 0 && waypointIndex < Waypoints.Count)
+        for (int i = 0; i < _segDistances.Length; i++)
         {
-            var target = Waypoints[waypointIndex];
-            var toTarget = target - position;
-            var distanceToTarget = toTarget.Length;
+            double distanceToTarget = _segDistances[i];
+
+            if (i > 0)
+            {
+                var delta = _waypoints[CurrentWaypointIndex + i] - position;
+                distanceToTarget = delta.Length;
+            }
 
             if (distanceToTarget <= remainingDistance)
             {
-                // Reach this waypoint and continue to next
-                position = target;
+                position = _waypoints[CurrentWaypointIndex + i];
                 remainingDistance -= distanceToTarget;
-                waypointIndex++;
             }
             else
             {
-                // We're partway on this segment at time t
-                // Return velocity toward current target waypoint
                 if (distanceToTarget < Constants.Epsilon)
                     return new Vector2D(0, 0);
-                return toTarget.Normalize() * Speed;
+                Vector2D dir = (i == 0) ? _segDirections[0] : (_waypoints[CurrentWaypointIndex + i] - position).Normalize();
+                return dir * Speed;
             }
         }
 
-        // Reached or passed final waypoint - target is stationary
         return new Vector2D(0, 0);
     }
 
     /// <summary>
     /// Gets the total number of path segments from current position through all remaining waypoints.
     /// </summary>
-    public int SegmentCount => CurrentWaypointIndex >= Waypoints.Count ? 0 : Waypoints.Count - CurrentWaypointIndex;
+    public int SegmentCount => CurrentWaypointIndex >= _waypoints.Length ? 0 : _waypoints.Length - CurrentWaypointIndex;
 
     /// <summary>
     /// Gets a path segment by index (0-based from current position).
@@ -216,11 +244,11 @@ public sealed class TargetPath
 
         if (index == 0)
         {
-            return new PathSegment(CurrentPosition, Waypoints[CurrentWaypointIndex], CurrentWaypointIndex);
+            return new PathSegment(CurrentPosition, _waypoints[CurrentWaypointIndex], CurrentWaypointIndex);
         }
 
         int waypointIndex = CurrentWaypointIndex + index;
-        return new PathSegment(Waypoints[waypointIndex - 1], Waypoints[waypointIndex], waypointIndex);
+        return new PathSegment(_waypoints[waypointIndex - 1], _waypoints[waypointIndex], waypointIndex);
     }
 
     /// <summary>
@@ -230,46 +258,49 @@ public sealed class TargetPath
     /// </summary>
     public IEnumerable<PathSegment> EnumerateSegments()
     {
-        if (CurrentWaypointIndex >= Waypoints.Count)
+        if (CurrentWaypointIndex >= _waypoints.Length)
             yield break;
 
         // First segment: current position to first waypoint
-        yield return new PathSegment(CurrentPosition, Waypoints[CurrentWaypointIndex], CurrentWaypointIndex);
+        yield return new PathSegment(CurrentPosition, _waypoints[CurrentWaypointIndex], CurrentWaypointIndex);
 
         // Remaining segments
-        for (int i = CurrentWaypointIndex; i < Waypoints.Count - 1; i++)
+        for (int i = CurrentWaypointIndex; i < _waypoints.Length - 1; i++)
         {
-            yield return new PathSegment(Waypoints[i], Waypoints[i + 1], i + 1);
+            yield return new PathSegment(_waypoints[i], _waypoints[i + 1], i + 1);
         }
     }
 }
 
 /// <summary>
-/// Represents a single segment of a path.
+/// Represents a single segment of a path with pre-computed length and direction.
 /// </summary>
-/// <param name="Start">Start point of the segment</param>
-/// <param name="End">End point of the segment</param>
-/// <param name="WaypointIndex">Index of the waypoint at the end of this segment</param>
-public readonly record struct PathSegment(Point2D Start, Point2D End, int WaypointIndex)
+public readonly struct PathSegment
 {
-    /// <summary>
-    /// Length of this segment.
-    /// </summary>
-    public double Length => (End - Start).Length;
+    public Point2D Start { get; }
+    public Point2D End { get; }
+    public int WaypointIndex { get; }
 
     /// <summary>
-    /// Direction vector (normalized) of this segment.
-    /// Returns zero vector for zero-length segments to avoid division by zero.
+    /// Pre-computed segment length (avoids repeated sqrt).
     /// </summary>
-    public Vector2D Direction
+    public double Length { get; }
+
+    /// <summary>
+    /// Pre-computed normalized direction. Zero vector for degenerate segments.
+    /// </summary>
+    public Vector2D Direction { get; }
+
+    public PathSegment(Point2D start, Point2D end, int waypointIndex)
     {
-        get
-        {
-            var delta = End - Start;
-            var length = delta.Length;
-            if (length < Constants.Epsilon)
-                return new Vector2D(0, 0);
-            return delta.Normalize();
-        }
+        Start = start;
+        End = end;
+        WaypointIndex = waypointIndex;
+
+        var delta = end - start;
+        Length = delta.Length;
+        Direction = Length < Constants.Epsilon
+            ? new Vector2D(0, 0)
+            : delta.Normalize();
     }
 }

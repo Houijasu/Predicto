@@ -5,5 +5,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Predicto.Tests/Predicto.Tests.csproj" />
+    <Project Path="tests/Predicto.Benchmarks/Predicto.Benchmarks.csproj" />
   </Folder>
 </Solution>

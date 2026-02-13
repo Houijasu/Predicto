@@ -1,4 +1,4 @@
-using MathNet.Numerics.RootFinding;
+using System.Runtime.CompilerServices;
 using MathNet.Spatial.Euclidean;
 using Predicto.Models;
 
@@ -40,6 +40,7 @@ public static class OffPathAimPointSolver
     /// Strategy 1: Direct behind - aim point is directly behind target on path line.
     /// Simple but may not be optimal for all caster positions.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Point2D CalculateDirectBehind(
         Point2D predictedPosition,
         Vector2D targetVelocity,
@@ -188,18 +189,11 @@ public static class OffPathAimPointSolver
         // Iterative refinement using Brent's method to find the true intercept time
         // for an off-path aim point. This is more robust than a fixed 5-iteration loop.
 
-        Func<double, double> timeResidual = t =>
-        {
-            var pos = path.GetPositionAtTime(t);
-            var v = path.GetVelocityAtTime(t);
-            var ap = CalculateBehindEdgeAimPoint(casterPosition, pos, v, effectiveRadius, strategy);
-            double dist = (ap - casterPosition).Length;
-            return (castDelay + (dist / skillshotSpeed)) - t;
-        };
+        var timeResidual = new TimeResidualFunc(path, casterPosition, effectiveRadius, castDelay, skillshotSpeed, strategy);
 
         // Bracket the search: [0, maxTime]
         double maxTime = castDelay + (skillshotRange / skillshotSpeed) + path.GetRemainingPathTime();
-        if (Brent.TryFindRoot(timeResidual, 0, maxTime, Constants.Epsilon, 100, out double refinedTime))
+        if (ZeroAllocRootFinder.TryBrent(ref timeResidual, 0, maxTime, Constants.Epsilon, 100, out double refinedTime))
         {
             interceptTime = refinedTime;
             predictedPos = path.GetPositionAtTime(interceptTime);
@@ -233,6 +227,7 @@ public static class OffPathAimPointSolver
         return (aimPoint, interceptTime);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Point2D Lerp(Point2D a, Point2D b, double t)
     {
         return new Point2D(
@@ -370,6 +365,25 @@ public static class OffPathAimPointSolver
         }
 
         return bestTime;
+    }
+
+    private readonly struct TimeResidualFunc(
+        TargetPath path,
+        Point2D casterPosition,
+        double effectiveRadius,
+        double castDelay,
+        double skillshotSpeed,
+        BehindEdgeStrategy strategy) : IDoubleFunction
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public double Evaluate(double t)
+        {
+            var pos = path.GetPositionAtTime(t);
+            var v = path.GetVelocityAtTime(t);
+            var ap = CalculateBehindEdgeAimPoint(casterPosition, pos, v, effectiveRadius, strategy);
+            double dist = (ap - casterPosition).Length;
+            return (castDelay + (dist / skillshotSpeed)) - t;
+        }
     }
 }
 

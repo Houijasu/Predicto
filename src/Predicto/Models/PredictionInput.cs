@@ -51,8 +51,7 @@ public readonly record struct PredictionInput(
     double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
     bool MinimizeTime = false,
     BehindEdgeStrategy Strategy = BehindEdgeStrategy.Adaptive,
-    Vector2D TargetAcceleration = default,
-    bool Reactive = false)
+    Vector2D TargetAcceleration = default)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.
@@ -112,8 +111,7 @@ public readonly record struct CircularPredictionInput(
     double CasterHitboxRadius = Constants.DefaultCasterHitboxRadius,
     bool MinimizeTime = false,
     BehindEdgeStrategy Strategy = BehindEdgeStrategy.Adaptive,
-    Vector2D TargetAcceleration = default,
-    bool Reactive = false)
+    Vector2D TargetAcceleration = default)
 {
     /// <summary>
     /// Returns true if this input uses a multi-waypoint path instead of simple velocity.

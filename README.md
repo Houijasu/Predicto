@@ -68,13 +68,18 @@ src/
       PredictionResult.cs      # Result types (Hit/OutOfRange/Unreachable)
       TargetPath.cs            # Multi-waypoint path handling
     Solvers/
-      InterceptSolver.cs       # Mathematical solving engine
-      OffPathAimPointSolver.cs # Off-path aim point strategies (DirectBehind/Tangent/Adaptive)
+      InterceptSolver.cs              # Core solver (quadratic, confidence, shared helpers)
+      InterceptSolver.Hitscan.cs      # Instant beam interception (Lux R, Xerath Q)
+      InterceptSolver.Refinement.cs   # Iterative refinement (Brent's method, bisection)
+      InterceptSolver.BehindTarget.cs # Behind-target strategy solvers
+      InterceptSolver.Path.cs         # Multi-waypoint path interception
+      InterceptSolver.Circular.cs     # Circular skillshot solvers
+      InterceptSolver.Gagong.cs       # Gagong strategy solver
+      OffPathAimPointSolver.cs        # Off-path aim point strategies (DirectBehind/Tangent/Adaptive)
     Physics/
-      DangerFields.cs          # Danger field potentials (experimental)
-      FastMath.cs              # Inlined math utilities (Lorentzian, etc.)
-      StructOdeSolver.cs       # Zero-allocation ODE integrators (RK4/Euler/Verlet)
-    Ultimate.cs                # Main prediction API
+      FastMath.cs                     # Inlined math utilities (Lorentzian, etc.)
+    Ultimate.cs                       # Main prediction API (core)
+    Ultimate.Targeting.cs             # Multi-target priority selection & ranking
     IPrediction.cs             # Prediction interface
     Constants.cs               # Game constants and helper methods
   
@@ -82,11 +87,13 @@ src/
     Program.cs                 # Raylib-based visualization (with --bench CLI mode)
 
 tests/
-  Predicto.Tests/              # Unit tests (185 tests)
+  Predicto.Tests/              # Unit tests (213 tests)
     InterceptSolverTests.cs    # Solver unit tests
     UltimateTests.cs           # Integration tests
     EdgeCaseRegressionTests.cs # Regression tests for bug fixes
     OffPathAimPointSolverTests.cs # Off-path aim strategy tests
+  Predicto.Benchmarks/         # BenchmarkDotNet performance benchmarks
+    PredictionBenchmarks.cs    # Linear, circular, and multi-target benchmarks
 ```
 
 ## Usage
@@ -297,7 +304,7 @@ This allows you to see the difference between blended and pure trailing-edge aim
 dotnet test
 ```
 
-Current test coverage: **185 tests** covering:
+Current test coverage: **213 tests** covering:
 - Basic interception scenarios
 - Edge cases (boundary conditions, numerical precision)
 - Multi-target priority selection
@@ -343,7 +350,6 @@ Main prediction engine implementing `IPrediction`.
 |--------|-------------|
 | `Predict(PredictionInput)` | Predicts intercept for linear skillshot |
 | `PredictCircular(CircularPredictionInput)` | Predicts intercept for circular skillshot |
-| `PredictReactive(PredictionInput)` | **[Experimental/Obsolete]** Physics-based dodge prediction |
 | `RankTargets(casterPos, skillshot, targets)` | Ranks multiple targets by hit probability |
 | `RankTargetsCircular(casterPos, skillshot, targets)` | Ranks targets for circular skillshot |
 | `GetBestTarget(casterPos, skillshot, targets)` | Gets single best hittable target |

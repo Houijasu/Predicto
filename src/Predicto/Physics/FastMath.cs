@@ -9,6 +9,24 @@ namespace Predicto.Physics;
 /// </summary>
 public static class FastMath
 {
+    // Pre-computed sin/cos for Gagong angle offsets: -π/2 + π*i/GagongAngleSteps, i=0..GagongAngleSteps
+    // Used with angle addition formulas to avoid per-iteration Math.Sin/Cos calls
+    internal static readonly double[] GagongOffsetCos;
+    internal static readonly double[] GagongOffsetSin;
+
+    static FastMath()
+    {
+        int steps = Constants.GagongAngleSteps;
+        GagongOffsetCos = new double[steps + 1];
+        GagongOffsetSin = new double[steps + 1];
+        double halfPi = Math.PI / 2;
+        for (int i = 0; i <= steps; i++)
+        {
+            double offset = -halfPi + (Math.PI * i / steps);
+            GagongOffsetCos[i] = Math.Cos(offset);
+            GagongOffsetSin[i] = Math.Sin(offset);
+        }
+    }
     /// <summary>
     /// Fast approximation of 1/(1 + x²) - Lorentzian/Cauchy distribution.
     /// Much faster than exp(-x²) and provides similar falloff behavior.
