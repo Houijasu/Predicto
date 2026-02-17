@@ -74,7 +74,7 @@ internal static class ZeroAllocRootFinder
             double mid = lo + ((hi - lo) * 0.5);
             double fMid = f.Evaluate(mid);
 
-            if (Math.Abs(fMid) < accuracy || (hi - lo) * 0.5 < accuracy)
+            if (Math.Abs(fMid) < accuracy || Math.Abs(hi - lo) * 0.5 < accuracy)
             {
                 root = mid;
                 return true;

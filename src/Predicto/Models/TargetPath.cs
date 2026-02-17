@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MathNet.Spatial.Euclidean;
 
 namespace Predicto.Models;
@@ -6,6 +7,7 @@ namespace Predicto.Models;
 /// Represents a multi-waypoint movement path for a target.
 /// Targets move along waypoints sequentially at a constant speed.
 /// </summary>
+[DebuggerDisplay("TargetPath(waypoints={_waypoints.Length}, speed={Speed:F1}, idx={CurrentWaypointIndex})")]
 public sealed class TargetPath
 {
     /// <summary>
@@ -42,7 +44,9 @@ public sealed class TargetPath
     /// <summary>
     /// Creates a new target path.
     /// </summary>
-    /// <param name="waypoints">The waypoints defining the path (minimum 1)</param>
+    /// <param name="waypoints">The waypoints defining the path (minimum 1).
+    /// If an array is passed, it is stored by reference without copying for performance.
+    /// The caller must not mutate the array after construction.</param>
     /// <param name="currentPosition">Current position of the target</param>
     /// <param name="currentWaypointIndex">Index of waypoint target is moving toward</param>
     /// <param name="speed">Movement speed in units per second</param>
@@ -275,6 +279,7 @@ public sealed class TargetPath
 /// <summary>
 /// Represents a single segment of a path with pre-computed length and direction.
 /// </summary>
+[DebuggerDisplay("Segment[{WaypointIndex}] len={Length:F1}")]
 public readonly struct PathSegment
 {
     public Point2D Start { get; }

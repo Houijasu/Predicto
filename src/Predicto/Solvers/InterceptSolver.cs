@@ -38,8 +38,7 @@ public sealed partial class InterceptSolver
     private static void ValidateInputs(
         double skillshotSpeed,
         double castDelay,
-        double skillshotRange = double.MaxValue,
-        string methodName = "")
+        double skillshotRange = double.MaxValue)
     {
         if (skillshotSpeed <= 0)
             throw new ArgumentException($"Skillshot speed must be positive, got {skillshotSpeed}", nameof(skillshotSpeed));

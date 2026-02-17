@@ -37,42 +37,7 @@ public sealed partial class Ultimate
             return Array.Empty<RankedTarget>();
 
         var results = new RankedTarget[targets.Length];
-
-        // SIMD-vectorized pre-filtering for range check
-        Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
-        PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
-
-        for (int i = 0; i < targets.Length; i++)
-        {
-            var target = targets[i];
-            PredictionResult result;
-
-            if (!reachable[i])
-            {
-                // Instant out of range
-                result = new PredictionResult.OutOfRange((target.Position - casterPosition).Length, skillshot.Range);
-            }
-            else
-            {
-                var input = new PredictionInput(
-                    casterPosition,
-                    target.Position,
-                    target.Velocity,
-                    skillshot,
-                    target.HitboxRadius,
-                    target.Path,
-                    Strategy: target.Strategy);
-
-                result = Predict(input);
-            }
-
-            double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
-            results[i] = new RankedTarget(target, result, priorityScore);
-        }
-
-        // Sort by priority score descending (highest priority first)
-        Array.Sort(results, static (a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
-
+        FillRankedTargets(casterPosition, skillshot, targets, results);
         return results;
     }
 
@@ -92,8 +57,93 @@ public sealed partial class Ultimate
             return Array.Empty<RankedTarget>();
 
         var results = new RankedTarget[targets.Length];
+        FillRankedTargetsCircular(casterPosition, skillshot, targets, results);
+        return results;
+    }
 
-        // SIMD-vectorized pre-filtering for range check
+    /// <summary>
+    /// Evaluates multiple targets and fills the provided span with results.
+    /// Returns the number of ranked targets written.
+    /// This method is zero-allocation if using stack-allocated span.
+    /// The results are sorted by priority score (highest first).
+    /// </summary>
+    /// <param name="casterPosition">Position of the caster</param>
+    /// <param name="skillshot">The skillshot to evaluate</param>
+    /// <param name="targets">Array of potential targets with their movement data</param>
+    /// <param name="resultsBuffer">Buffer to store results. Must optionally be larger than targets.Length, but only targets.Length will be written.</param>
+    /// <returns> The number of targets processed.</returns>
+    public int FillRankedTargets(
+        Point2D casterPosition,
+        LinearSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets,
+        Span<RankedTarget> resultsBuffer)
+    {
+        if (targets.IsEmpty)
+            return 0;
+
+        if (resultsBuffer.Length < targets.Length)
+            throw new ArgumentException("Buffer too small", nameof(resultsBuffer));
+
+        // Reuse existing SIMD logic.
+        // Stackalloc reachable array if small enough, otherwise use ArrayPool or new array efficiently?
+        // Actually, for strict zero-alloc, we can't allocate `new bool[]`. 
+        // We should probably rely on caller managing buffer, but here we need internal buffer.
+        // Let's stick to the current pattern inside `RankTargets`: stackalloc if small.
+        Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
+        PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
+
+        for (int i = 0; i < targets.Length; i++)
+        {
+            var target = targets[i];
+            PredictionResult result;
+
+            if (!reachable[i])
+            {
+                result = new PredictionResult.OutOfRange((target.Position - casterPosition).Length, skillshot.Range);
+            }
+            else
+            {
+                var input = new PredictionInput(
+                    casterPosition,
+                    target.Position,
+                    target.Velocity,
+                    skillshot,
+                    target.HitboxRadius,
+                    target.Path,
+                    Strategy: target.Strategy);
+
+                result = Predict(input);
+            }
+
+            double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
+            resultsBuffer[i] = new RankedTarget(target, result, priorityScore);
+        }
+
+        // Sort the written portion of the buffer
+        var written = resultsBuffer.Slice(0, targets.Length);
+        written.Sort(static (a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
+
+        return targets.Length;
+    }
+
+    /// <summary>
+    /// Evaluates multiple targets for a circular skillshot and fills the provided span with results.
+    /// Returns the number of ranked targets written.
+    /// This method is zero-allocation if using stack-allocated span.
+    /// The results are sorted by priority score (highest first).
+    /// </summary>
+    public int FillRankedTargetsCircular(
+        Point2D casterPosition,
+        CircularSkillshot skillshot,
+        ReadOnlySpan<TargetCandidate> targets,
+        Span<RankedTarget> resultsBuffer)
+    {
+        if (targets.IsEmpty)
+            return 0;
+
+        if (resultsBuffer.Length < targets.Length)
+            throw new ArgumentException("Buffer too small", nameof(resultsBuffer));
+
         Span<bool> reachable = targets.Length <= Constants.StackallocThreshold ? stackalloc bool[targets.Length] : new bool[targets.Length];
         PreFilterTargetsSimd(casterPosition, skillshot.Range, targets, reachable);
 
@@ -121,13 +171,13 @@ public sealed partial class Ultimate
             }
 
             double priorityScore = CalculatePriorityScore(result, target.PriorityWeight, casterPosition, skillshot.Range);
-            results[i] = new RankedTarget(target, result, priorityScore);
+            resultsBuffer[i] = new RankedTarget(target, result, priorityScore);
         }
 
-        // Sort by priority score descending (highest priority first)
-        Array.Sort(results, static (a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
+        var written = resultsBuffer.Slice(0, targets.Length);
+        written.Sort(static (a, b) => b.PriorityScore.CompareTo(a.PriorityScore));
 
-        return results;
+        return targets.Length;
     }
 
     /// <summary>

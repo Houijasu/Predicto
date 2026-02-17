@@ -106,13 +106,13 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
     for (int i = 0; i < warmupIterations; i++)
     {
         var s = scenarios[i % scenarios.Length];
-        sink += InterceptSolver.SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
+        sink += InterceptSolver.SolveInterceptTimeWithFullRefinement(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range) ?? 0;
     }
     for (int i = 0; i < warmupIterations; i++)
     {
         var s = scenarios[i % scenarios.Length];
-        sink += InterceptSolver.SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
+        sink += InterceptSolver.SolveInterceptTimeWithSecantRefinement(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range) ?? 0;
     }
 
@@ -120,14 +120,14 @@ static void RunBench(double targetHitboxRadius, double skillshotWidth, double ma
         "Newton",
         scenarios,
         measureIterations,
-        static s => InterceptSolver.SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
+        static s => InterceptSolver.SolveInterceptTimeWithFullRefinement(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range));
 
     var (secantMs, secantFound, secantResidual) = Measure(
         "Secant (legacy)",
         scenarios,
         measureIterations,
-        static s => InterceptSolver.SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
+        static s => InterceptSolver.SolveInterceptTimeWithSecantRefinement(
             s.Caster, s.Target, s.Vel, s.Speed, s.Delay, s.Range));
 
     // Prevent dead-code elimination.

@@ -16,7 +16,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: "10.0.x"
 
       - name: Restore dependencies
         run: dotnet restore
@@ -28,4 +28,33 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity normal
+        run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage"
+
+      - name: Enforce coverage threshold
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          threshold = 0.70
+          files = glob.glob('**/coverage.cobertura.xml', recursive=True)
+          if not files:
+              print('No coverage report found.')
+              sys.exit(1)
+
+          # Use the newest report when multiple test runs exist.
+          files.sort(key=lambda p: __import__('os').path.getmtime(p), reverse=True)
+          report = files[0]
+
+          root = ET.parse(report).getroot()
+          line_rate = float(root.attrib.get('line-rate', '0'))
+          print(f'Coverage report: {report}')
+          print(f'Line coverage: {line_rate:.2%} (threshold: {threshold:.0%})')
+
+          if line_rate < threshold:
+              print('Coverage below threshold.')
+              sys.exit(1)
+
+          print('Coverage threshold satisfied.')
+          PY

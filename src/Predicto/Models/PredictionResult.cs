@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MathNet.Spatial.Euclidean;
 
 namespace Predicto.Models;
@@ -17,6 +18,7 @@ public abstract record PredictionResult
     /// <param name="PredictedTargetPosition">Where the target will be at interception</param>
     /// <param name="InterceptTime">Time in seconds until interception</param>
     /// <param name="Confidence">Confidence score (0-1) based on prediction reliability</param>
+    [DebuggerDisplay("Hit(Cast=({CastPosition.X:F1}, {CastPosition.Y:F1}), t={InterceptTime:F4}s, conf={Confidence:P0})")]
     public sealed record Hit(
         Point2D CastPosition,
         Point2D PredictedTargetPosition,
@@ -28,6 +30,7 @@ public abstract record PredictionResult
     /// </summary>
     /// <param name="Distance">Current distance to target</param>
     /// <param name="MaxRange">Skillshot's maximum range</param>
+    [DebuggerDisplay("OutOfRange(dist={Distance:F1}, max={MaxRange:F1})")]
     public sealed record OutOfRange(
         double Distance,
         double MaxRange) : PredictionResult;
@@ -36,6 +39,7 @@ public abstract record PredictionResult
     /// No valid interception solution exists (target moving too fast, etc.)
     /// </summary>
     /// <param name="Reason">Human-readable explanation of why interception failed</param>
+    [DebuggerDisplay("Unreachable({Reason})")]
     public sealed record Unreachable(
         string Reason) : PredictionResult;
 }

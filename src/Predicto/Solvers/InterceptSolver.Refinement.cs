@@ -52,15 +52,57 @@ public sealed partial class InterceptSolver
         if (fLow <= 0)
             return tLow;
 
-        // Use MathNet's Bisection.TryFindRoot for robust root finding
-        Func<double, double> f = t => EvaluateCollisionFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius, t);
-
-        if (Bisection.TryFindRoot(f, tLow, tHigh, tolerance, maxIterations, out double root))
+        // Use ZeroAllocRootFinder for allocation-free root finding
+        // This avoids the delegate allocation of 'f' and the boxing/closure overhead
+        var func = new CollisionTimeFunction(D, targetVelocity, skillshotSpeed, castDelay, effectiveRadius);
+        if (ZeroAllocRootFinder.TryBisection(ref func, tLow, tHigh, tolerance, maxIterations, out double root))
         {
             return root;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Struct-based function for zero-allocation root finding.
+    /// Represents f(t) = |D + V*t| - (s*(t-d) + r)
+    /// </summary>
+    private readonly struct CollisionTimeFunction : IDoubleFunction
+    {
+        private readonly Vector2D _D;
+        private readonly Vector2D _V;
+        private readonly double _s;
+        private readonly double _d;
+        private readonly double _r;
+
+        public CollisionTimeFunction(Vector2D D, Vector2D V, double s, double d, double r)
+        {
+            _D = D;
+            _V = V;
+            _s = s;
+            _d = d;
+            _r = r;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public double Evaluate(double t)
+        {
+            // Position of target relative to caster at time t: P(t) = D + V*t
+            double px = _D.X + (_V.X * t);
+            double py = _D.Y + (_V.Y * t);
+
+            // Distance from caster to target at time t
+            double dist = Math.Sqrt((px * px) + (py * py));
+
+            // Distance projectile can travel in time (t - d)
+            // If t < d, projectile hasn't fired yet, distance is 0 (or negative effectively)
+            double projectileDist = _s * (t - _d);
+
+            // We want dist <= projectileDist + radius
+            // Function is difference: dist - (projectileDist + radius)
+            // Root is where shell hits target edge
+            return dist - (projectileDist + _r);
+        }
     }
 
     /// <summary>
@@ -787,95 +829,4 @@ public sealed partial class InterceptSolver
         return refined;
     }
 
-    internal static double? SolveInterceptTimeWithNewtonRefinement_ForBenchmark(
-        Point2D casterPosition,
-        Point2D targetPosition,
-        Vector2D targetVelocity,
-        double skillshotSpeed,
-        double castDelay,
-        double skillshotRange = double.MaxValue,
-        double tolerance = 1e-12)
-    {
-        double? initialEstimate = SolveInterceptTime(
-            casterPosition,
-            targetPosition,
-            targetVelocity,
-            skillshotSpeed,
-            castDelay,
-            skillshotRange);
-
-        if (!initialEstimate.HasValue)
-            return null;
-
-        double maxTime = castDelay + (skillshotRange / skillshotSpeed);
-
-        var displacement = targetPosition - casterPosition;
-        var D = new Vector2D(displacement.X, displacement.Y);
-
-        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
-        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
-
-        // Benchmark mode: cap Newton iterations so we measure typical convergence cost.
-        double refined = RefineWithNewton(
-            D,
-            targetVelocity,
-            skillshotSpeed,
-            castDelay,
-            maxTime,
-            initialEstimate.Value,
-            positionTolerance,
-            timeTolerance,
-            maxIterations: 8);
-
-        if (refined <= castDelay || refined > maxTime)
-            return initialEstimate;
-
-        return refined;
-    }
-
-    internal static double? SolveInterceptTimeWithSecantRefinement_Legacy_ForBenchmark(
-        Point2D casterPosition,
-        Point2D targetPosition,
-        Vector2D targetVelocity,
-        double skillshotSpeed,
-        double castDelay,
-        double skillshotRange = double.MaxValue,
-        double tolerance = 1e-12)
-    {
-        double? initialEstimate = SolveInterceptTime(
-            casterPosition,
-            targetPosition,
-            targetVelocity,
-            skillshotSpeed,
-            castDelay,
-            skillshotRange);
-
-        if (!initialEstimate.HasValue)
-            return null;
-
-        double maxTime = castDelay + (skillshotRange / skillshotSpeed);
-
-        var displacement = targetPosition - casterPosition;
-        var D = new Vector2D(displacement.X, displacement.Y);
-
-        double positionTolerance = GetRefinementPositionTolerance(defaultPositionTolerance: Constants.Epsilon);
-        double timeTolerance = GetAdaptiveTimeToleranceFromSpeed(positionTolerance, skillshotSpeed, fallback: tolerance);
-
-        double refined = RefineWithNewton(
-            D,
-            targetVelocity,
-            skillshotSpeed,
-            castDelay,
-            maxTime,
-            initialEstimate.Value,
-            positionTolerance,
-            timeTolerance,
-            maxIterations: 10);
-
-        if (refined <= castDelay || refined > maxTime)
-            return initialEstimate;
-
-
-        return refined;
-    }
 }
